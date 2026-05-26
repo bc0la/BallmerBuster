@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BallmerBuster Report</title>
+<style>
+  :root { --bg: #0d1117; --fg: #c9d1d9; --card: #161b22; --border: #30363d; --accent: #58a6ff; --crit: #f85149; --high: #d29922; --med: #3fb950; --low: #8b949e; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace; background: var(--bg); color: var(--fg); padding: 1rem; }
+  h1 { color: var(--accent); margin-bottom: 1rem; font-size: 1.4rem; }
+  .summary { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+  .summary .badge { padding: 0.3rem 0.8rem; border-radius: 4px; font-weight: bold; font-size: 0.85rem; }
+  .sev-critical { background: var(--crit); color: #fff; }
+  .sev-high { background: var(--high); color: #000; }
+  .sev-medium { background: var(--med); color: #000; }
+  .sev-low { background: var(--low); color: #000; }
+  .sev-info { background: var(--border); color: var(--fg); }
+  .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 1rem; }
+  .tab { padding: 0.5rem 1rem; cursor: pointer; border-bottom: 2px solid transparent; color: var(--low); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab:hover { color: var(--fg); }
+  .findings { display: flex; flex-direction: column; gap: 0.5rem; }
+  .finding { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 0.8rem; }
+  .finding .title { font-weight: bold; margin-bottom: 0.3rem; }
+  .finding .meta { font-size: 0.8rem; color: var(--low); }
+  .finding details { margin-top: 0.5rem; }
+  .finding pre { background: var(--bg); padding: 0.5rem; border-radius: 4px; overflow-x: auto; font-size: 0.8rem; margin-top: 0.3rem; }
+  #loading { color: var(--low); }
+</style>
+</head>
+<body>
+<h1>BallmerBuster</h1>
+<div class="summary" id="summary"></div>
+<div class="tabs" id="tabs"></div>
+<div class="findings" id="findings"></div>
+<div id="loading">loading…</div>
+<script>
+const sevOrder = {critical:0, high:1, medium:2, low:3, info:4};
+let currentModule = null;
+
+async function loadSummary() {
+  const resp = await fetch('/api/summary');
+  const data = await resp.json();
+  const el = document.getElementById('summary');
+  if (data.severity) {
+    for (const sev of ['critical','high','medium','low','info']) {
+      if (data.severity[sev]) {
+        const b = document.createElement('span');
+        b.className = 'badge sev-' + sev;
+        b.textContent = sev + ': ' + data.severity[sev];
+        el.appendChild(b);
+      }
+    }
+  }
+  const tabs = document.getElementById('tabs');
+  const allTab = document.createElement('div');
+  allTab.className = 'tab active';
+  allTab.textContent = 'All';
+  allTab.onclick = () => loadFindings(null, allTab);
+  tabs.appendChild(allTab);
+  if (data.modules) {
+    for (const m of data.modules) {
+      if (m.count === 0) continue;
+      const t = document.createElement('div');
+      t.className = 'tab';
+      t.textContent = m.module + ' (' + m.count + ')';
+      t.onclick = () => loadFindings(m.module, t);
+      tabs.appendChild(t);
+    }
+  }
+  loadFindings(null, allTab);
+}
+
+async function loadFindings(mod, tabEl) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  if (tabEl) tabEl.classList.add('active');
+  currentModule = mod;
+  const url = mod ? '/api/findings?module=' + encodeURIComponent(mod) : '/api/findings';
+  const resp = await fetch(url);
+  const data = await resp.json();
+  const el = document.getElementById('findings');
+  document.getElementById('loading').style.display = 'none';
+  el.innerHTML = '';
+  if (!data || data.length === 0) { el.textContent = 'No findings.'; return; }
+  for (const f of data) {
+    const div = document.createElement('div');
+    div.className = 'finding';
+    div.innerHTML = '<div class="title"><span class="badge sev-' + f.severity + '">' + f.severity + '</span> ' + esc(f.title) + '</div>'
+      + '<div class="meta">' + esc(f.module) + ' | ' + esc(f.subscription_id) + (f.region ? ' | ' + esc(f.region) : '') + (f.resource_id ? ' | ' + esc(f.resource_id) : '') + '</div>'
+      + (f.detail ? '<details><summary>detail</summary><pre>' + esc(JSON.stringify(f.detail, null, 2)) + '</pre></details>' : '')
+      + (f.raw_output_path ? '<div class="meta"><a href="' + esc(f.raw_output_path) + '" style="color:var(--accent)">raw output</a></div>' : '');
+    el.appendChild(div);
+  }
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+loadSummary();
+</script>
+</body>
+</html>

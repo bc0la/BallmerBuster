@@ -1,0 +1,252 @@
+package keyvault_exposure
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/keyvault/armkeyvault"
+
+	"github.com/you/ballmerbuster/internal/creds"
+	"github.com/you/ballmerbuster/internal/findings"
+	"github.com/you/ballmerbuster/internal/module"
+)
+
+func init() { module.Register(Module{}) }
+
+// Module inspects Azure Key Vaults for public network access,
+// overly permissive access policies, and missing soft-delete / purge protection.
+type Module struct{}
+
+func (Module) Name() string      { return "keyvault_exposure" }
+func (Module) Kind() module.Kind { return module.KindNative }
+func (Module) Requires() []string {
+	return []string{"Microsoft.KeyVault/vaults/read"}
+}
+
+func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink findings.Sink) error {
+	client, err := armkeyvault.NewVaultsClient(target.SubscriptionID, target.Credential, nil)
+	if err != nil {
+		return fmt.Errorf("keyvault_exposure: create client: %w", err)
+	}
+
+	// Collect vault resource stubs from the list endpoint.
+	type vaultRef struct {
+		Name     string
+		RG       string
+		ID       string
+		Location string
+	}
+	var refs []vaultRef
+	pager := client.NewListBySubscriptionPager(nil)
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return fmt.Errorf("keyvault_exposure: list vaults: %w", err)
+		}
+		for _, v := range page.Value {
+			name := ptrVal(v.Name)
+			id := ptrVal(v.ID)
+			rg := resourceGroup(id)
+			if rg == "" || name == "" {
+				continue
+			}
+			refs = append(refs, vaultRef{
+				Name:     name,
+				RG:       rg,
+				ID:       id,
+				Location: ptrVal(v.Location),
+			})
+		}
+	}
+
+	_ = sink.LogEvent(ctx, "keyvault_exposure", target.SubscriptionID, "info",
+		fmt.Sprintf("scanning %d Key Vaults", len(refs)))
+
+	for i, ref := range refs {
+		_ = sink.LogEvent(ctx, "keyvault_exposure", target.SubscriptionID, "info",
+			fmt.Sprintf("vault %d/%d: %s", i+1, len(refs), ref.Name))
+
+		resp, err := client.Get(ctx, ref.RG, ref.Name, nil)
+		if err != nil {
+			_ = sink.LogEvent(ctx, "keyvault_exposure", target.SubscriptionID, "warn",
+				fmt.Sprintf("get vault %s: %v", ref.Name, err))
+			continue
+		}
+		vault := resp.Vault
+		if vault.Properties == nil {
+			continue
+		}
+		props := vault.Properties
+
+		// --- Network exposure checks ---
+		publicNetwork := isPublicAccess(props)
+		permissiveCount := countOverlyPermissivePolicies(props)
+
+		if publicNetwork && permissiveCount > 0 {
+			// High: public access combined with overly permissive policies.
+			_ = sink.Write(ctx, findings.Finding{
+				SubscriptionID: target.SubscriptionID,
+				Region:         ref.Location,
+				Module:         "keyvault_exposure",
+				Severity:       findings.SevHigh,
+				ResourceID:     ref.ID,
+				Title: fmt.Sprintf("Key Vault %s has public network access with %d overly permissive access policies",
+					ref.Name, permissiveCount),
+				Detail: map[string]any{
+					"vault_name":              ref.Name,
+					"public_network_access":   true,
+					"permissive_policy_count": permissiveCount,
+				},
+			})
+		} else if publicNetwork {
+			// Low: public network access alone.
+			_ = sink.Write(ctx, findings.Finding{
+				SubscriptionID: target.SubscriptionID,
+				Region:         ref.Location,
+				Module:         "keyvault_exposure",
+				Severity:       findings.SevLow,
+				ResourceID:     ref.ID,
+				Title:          fmt.Sprintf("Key Vault %s has public network access with no IP restrictions", ref.Name),
+				Detail: map[string]any{
+					"vault_name":            ref.Name,
+					"public_network_access": true,
+				},
+			})
+		}
+
+		if permissiveCount > 0 && !publicNetwork {
+			// Still flag overly permissive policies even without public access.
+			_ = sink.Write(ctx, findings.Finding{
+				SubscriptionID: target.SubscriptionID,
+				Region:         ref.Location,
+				Module:         "keyvault_exposure",
+				Severity:       findings.SevHigh,
+				ResourceID:     ref.ID,
+				Title: fmt.Sprintf("Key Vault %s has %d overly permissive access policies",
+					ref.Name, permissiveCount),
+				Detail: map[string]any{
+					"vault_name":              ref.Name,
+					"permissive_policy_count": permissiveCount,
+				},
+			})
+		}
+
+		// --- Soft-delete check ---
+		softDeleteEnabled := props.EnableSoftDelete != nil && *props.EnableSoftDelete
+		if !softDeleteEnabled {
+			_ = sink.Write(ctx, findings.Finding{
+				SubscriptionID: target.SubscriptionID,
+				Region:         ref.Location,
+				Module:         "keyvault_exposure",
+				Severity:       findings.SevMedium,
+				ResourceID:     ref.ID,
+				Title:          fmt.Sprintf("Key Vault %s has soft-delete disabled", ref.Name),
+				Detail: map[string]any{
+					"vault_name":  ref.Name,
+					"soft_delete": false,
+				},
+			})
+		}
+
+		// --- Purge protection check (only relevant if soft-delete is enabled) ---
+		if softDeleteEnabled {
+			purgeProtection := props.EnablePurgeProtection != nil && *props.EnablePurgeProtection
+			if !purgeProtection {
+				_ = sink.Write(ctx, findings.Finding{
+					SubscriptionID: target.SubscriptionID,
+					Region:         ref.Location,
+					Module:         "keyvault_exposure",
+					Severity:       findings.SevMedium,
+					ResourceID:     ref.ID,
+					Title:          fmt.Sprintf("Key Vault %s has purge protection disabled", ref.Name),
+					Detail: map[string]any{
+						"vault_name":       ref.Name,
+						"purge_protection": false,
+					},
+				})
+			}
+		}
+	}
+
+	return nil
+}
+
+// isPublicAccess returns true when the vault's network configuration allows
+// unrestricted public access.
+func isPublicAccess(props *armkeyvault.VaultProperties) bool {
+	// Check explicit PublicNetworkAccess property.
+	if props.PublicNetworkAccess != nil && strings.EqualFold(*props.PublicNetworkAccess, "Disabled") {
+		return false
+	}
+	// If NetworkAcls is nil or DefaultAction is Allow, it's public.
+	if props.NetworkACLs == nil {
+		return true
+	}
+	if props.NetworkACLs.DefaultAction == nil || *props.NetworkACLs.DefaultAction == armkeyvault.NetworkRuleActionAllow {
+		return true
+	}
+	return false
+}
+
+// countOverlyPermissivePolicies counts access policies where any permission
+// category contains "all".
+func countOverlyPermissivePolicies(props *armkeyvault.VaultProperties) int {
+	count := 0
+	for _, policy := range props.AccessPolicies {
+		if policy.Permissions == nil {
+			continue
+		}
+		if hasAllSecretPerm(policy.Permissions.Secrets) ||
+			hasAllKeyPerm(policy.Permissions.Keys) ||
+			hasAllCertPerm(policy.Permissions.Certificates) {
+			count++
+		}
+	}
+	return count
+}
+
+func hasAllSecretPerm(perms []*armkeyvault.SecretPermissions) bool {
+	for _, p := range perms {
+		if p != nil && strings.EqualFold(string(*p), "all") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAllKeyPerm(perms []*armkeyvault.KeyPermissions) bool {
+	for _, p := range perms {
+		if p != nil && strings.EqualFold(string(*p), "all") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAllCertPerm(perms []*armkeyvault.CertificatePermissions) bool {
+	for _, p := range perms {
+		if p != nil && strings.EqualFold(string(*p), "all") {
+			return true
+		}
+	}
+	return false
+}
+
+func resourceGroup(id string) string {
+	parts := strings.Split(id, "/")
+	for i, p := range parts {
+		if strings.EqualFold(p, "resourceGroups") && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
+}
+
+func ptrVal[T any](p *T) T {
+	if p == nil {
+		var zero T
+		return zero
+	}
+	return *p
+}

@@ -1,0 +1,95 @@
+[
+  {
+    "service": "Azure App Service",
+    "cname": ["azurewebsites.net"],
+    "fingerprint": "404 Web Site not found",
+    "nxdomain": true,
+    "vulnerable": true
+  },
+  {
+    "service": "Azure CDN (Edgio/Verizon)",
+    "cname": ["azureedge.net"],
+    "fingerprint": "",
+    "nxdomain": true,
+    "vulnerable": true
+  },
+  {
+    "service": "Azure Traffic Manager",
+    "cname": ["trafficmanager.net"],
+    "fingerprint": "",
+    "nxdomain": true,
+    "vulnerable": true
+  },
+  {
+    "service": "Azure Blob Storage",
+    "cname": ["blob.core.windows.net"],
+    "fingerprint": "BlobNotFound",
+    "http_status": 404,
+    "nxdomain": true,
+    "vulnerable": true
+  },
+  {
+    "service": "Azure Cloud Services",
+    "cname": ["cloudapp.net", "cloudapp.azure.com"],
+    "fingerprint": "",
+    "nxdomain": true,
+    "vulnerable": true
+  },
+  {
+    "service": "Azure Front Door",
+    "cname": ["azurefd.net"],
+    "fingerprint": "Our services aren't available right now",
+    "nxdomain": true,
+    "vulnerable": true
+  },
+  {
+    "service": "Azure API Management",
+    "cname": ["azure-api.net"],
+    "fingerprint": "resource not found",
+    "nxdomain": true,
+    "vulnerable": true
+  },
+  {
+    "service": "Azure Static Web Apps",
+    "cname": ["azurestaticapps.net"],
+    "fingerprint": "",
+    "nxdomain": true,
+    "vulnerable": true
+  },
+  {
+    "service": "GitHub Pages",
+    "cname": ["github.io"],
+    "fingerprint": "There isn't a GitHub Pages site here",
+    "http_status": 404,
+    "nxdomain": true,
+    "vulnerable": true
+  },
+  {
+    "service": "Heroku",
+    "cname": ["herokuapp.com", "herokussl.com"],
+    "fingerprint": "no-such-app.html",
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "AWS S3",
+    "cname": ["s3.amazonaws.com"],
+    "fingerprint": "NoSuchBucket",
+    "nxdomain": true,
+    "vulnerable": true
+  },
+  {
+    "service": "AWS CloudFront",
+    "cname": ["cloudfront.net"],
+    "fingerprint": "could not be satisfied",
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Shopify",
+    "cname": ["myshopify.com"],
+    "fingerprint": "Sorry, this shop is currently unavailable",
+    "nxdomain": false,
+    "vulnerable": true
+  }
+]

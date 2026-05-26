@@ -1,0 +1,16 @@
+# Binary
+ballmerbuster
+ballmerbuster.exe
+
+# Engagement output
+engagements/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
