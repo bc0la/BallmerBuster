@@ -131,9 +131,10 @@ async function loadFindings() {
   currentTable = null;
   const qs = currentModule ? `?module=${encodeURIComponent(currentModule)}` : '';
   allFindings = await fetch('/api/findings' + qs).then(r => r.json()) || [];
-  document.getElementById('export-curls').style.display = allFindings.some(f => f.detail && f.detail.curl) ? '' : 'none';
-  document.getElementById('export-raw').style.display = currentModule ? '' : 'none';
-  document.getElementById('export-assets').style.display = currentModule ? '' : 'none';
+  const hasCurls = allFindings.some(f => f.detail && f.detail.curl);
+  document.getElementById('export-curls').style.display = hasCurls ? '' : 'none';
+  document.getElementById('export-raw').style.display = '';
+  document.getElementById('export-assets').style.display = '';
   render();
 }
 

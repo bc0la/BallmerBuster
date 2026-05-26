@@ -1,23 +1,46 @@
 [
   {
+    "service": "Microsoft Azure",
+    "cname": [
+      "cloudapp.net",
+      "cloudapp.azure.com",
+      "azurewebsites.net",
+      "blob.core.windows.net",
+      "azure-api.net",
+      "azurehdinsight.net",
+      "azureedge.net",
+      "azurecontainer.io",
+      "database.windows.net",
+      "azuredatalakestore.net",
+      "search.windows.net",
+      "azurecr.io",
+      "redis.cache.windows.net",
+      "servicebus.windows.net",
+      "visualstudio.com",
+      "azurefd.net",
+      "azurestaticapps.net",
+      "trafficmanager.net",
+      "azuremicroservices.io"
+    ],
+    "fingerprint": "NXDOMAIN",
+    "http_status": null,
+    "nxdomain": true,
+    "vulnerable": true
+  },
+  {
     "service": "Azure App Service",
     "cname": ["azurewebsites.net"],
     "fingerprint": "404 Web Site not found",
-    "nxdomain": true,
+    "http_status": null,
+    "nxdomain": false,
     "vulnerable": true
   },
   {
-    "service": "Azure CDN (Edgio/Verizon)",
-    "cname": ["azureedge.net"],
-    "fingerprint": "",
-    "nxdomain": true,
-    "vulnerable": true
-  },
-  {
-    "service": "Azure Traffic Manager",
-    "cname": ["trafficmanager.net"],
-    "fingerprint": "",
-    "nxdomain": true,
+    "service": "Azure Front Door",
+    "cname": ["azurefd.net"],
+    "fingerprint": "Our services aren't available right now",
+    "http_status": null,
+    "nxdomain": false,
     "vulnerable": true
   },
   {
@@ -25,63 +48,286 @@
     "cname": ["blob.core.windows.net"],
     "fingerprint": "BlobNotFound",
     "http_status": 404,
-    "nxdomain": true,
-    "vulnerable": true
-  },
-  {
-    "service": "Azure Cloud Services",
-    "cname": ["cloudapp.net", "cloudapp.azure.com"],
-    "fingerprint": "",
-    "nxdomain": true,
-    "vulnerable": true
-  },
-  {
-    "service": "Azure Front Door",
-    "cname": ["azurefd.net"],
-    "fingerprint": "Our services aren't available right now",
-    "nxdomain": true,
+    "nxdomain": false,
     "vulnerable": true
   },
   {
     "service": "Azure API Management",
     "cname": ["azure-api.net"],
     "fingerprint": "resource not found",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "AWS/Elastic Beanstalk",
+    "cname": ["elasticbeanstalk.com"],
+    "fingerprint": "NXDOMAIN",
+    "http_status": null,
     "nxdomain": true,
     "vulnerable": true
   },
   {
-    "service": "Azure Static Web Apps",
-    "cname": ["azurestaticapps.net"],
-    "fingerprint": "",
+    "service": "AWS/S3",
+    "cname": ["s3.amazonaws.com"],
+    "fingerprint": "The specified bucket does not exist",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Agile CRM",
+    "cname": ["agilecrm.com"],
+    "fingerprint": "Sorry, this page is no longer available.",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Airee.ru",
+    "cname": ["airee.ru"],
+    "fingerprint": "Ошибка 402",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Anima",
+    "cname": ["animaapp.io"],
+    "fingerprint": "The page you were looking for does not exist.",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Bitbucket",
+    "cname": ["bitbucket.io"],
+    "fingerprint": "Repository not found",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Campaign Monitor",
+    "cname": [],
+    "fingerprint": "Trying to access your account?",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Cargo Collective",
+    "cname": [],
+    "fingerprint": "404 Not Found",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Discourse",
+    "cname": ["trydiscourse.com"],
+    "fingerprint": "NXDOMAIN",
+    "http_status": null,
     "nxdomain": true,
+    "vulnerable": true
+  },
+  {
+    "service": "Gemfury",
+    "cname": ["furyns.com"],
+    "fingerprint": "404: This page could not be found.",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "GetResponse",
+    "cname": [],
+    "fingerprint": "With GetResponse Landing Pages, lead generation has never been easier",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Ghost",
+    "cname": ["ghost.io"],
+    "fingerprint": "Site unavailable",
+    "http_status": null,
+    "nxdomain": false,
     "vulnerable": true
   },
   {
     "service": "GitHub Pages",
     "cname": ["github.io"],
-    "fingerprint": "There isn't a GitHub Pages site here",
+    "fingerprint": "There isn't a GitHub Pages site here.",
     "http_status": 404,
-    "nxdomain": true,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "HatenaBlog",
+    "cname": ["hatenablog.com"],
+    "fingerprint": "404 Blog is not found",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Help Juice",
+    "cname": ["helpjuice.com"],
+    "fingerprint": "We could not find what you're looking for.",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Help Scout",
+    "cname": ["helpscoutdocs.com"],
+    "fingerprint": "No settings were found for this company:",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Helprace",
+    "cname": ["helprace.com"],
+    "fingerprint": "HTTP_STATUS=301",
+    "http_status": 301,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "JetBrains (YouTrack)",
+    "cname": ["youtrack.cloud"],
+    "fingerprint": "is not a registered InCloud YouTrack",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "LaunchRock",
+    "cname": ["launchrock.com"],
+    "fingerprint": "HTTP_STATUS=500",
+    "http_status": 500,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Ngrok",
+    "cname": ["ngrok.io"],
+    "fingerprint": "Tunnel",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Pantheon",
+    "cname": [],
+    "fingerprint": "404 error unknown site!",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Pingdom",
+    "cname": [],
+    "fingerprint": "Sorry, couldn't find the status page",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Readme.io",
+    "cname": ["readme.io"],
+    "fingerprint": "The creators of this project are still working on making everything perfect!",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Read the Docs",
+    "cname": [],
+    "fingerprint": "The link you have followed or the URL that you entered does not exist.",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Short.io",
+    "cname": [],
+    "fingerprint": "Link does not exist",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "SmartJobBoard",
+    "cname": ["52.16.160.97"],
+    "fingerprint": "This job board website is either expired or its domain name is invalid.",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Strikingly",
+    "cname": ["s.strikinglydns.com"],
+    "fingerprint": "PAGE NOT FOUND.",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Surge.sh",
+    "cname": ["na-west1.surge.sh"],
+    "fingerprint": "project not found",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "SurveySparrow",
+    "cname": ["surveysparrow.com"],
+    "fingerprint": "Account not found.",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Uberflip",
+    "cname": ["read.uberflip.com"],
+    "fingerprint": "The URL you've accessed does not provide a hub.",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Uptimerobot",
+    "cname": ["stats.uptimerobot.com"],
+    "fingerprint": "page not found",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Wordpress",
+    "cname": ["wordpress.com"],
+    "fingerprint": "Do you want to register",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Worksites",
+    "cname": ["worksites.net", "69.164.223.206"],
+    "fingerprint": "Hello! Sorry, but the website you",
+    "http_status": null,
+    "nxdomain": false,
     "vulnerable": true
   },
   {
     "service": "Heroku",
     "cname": ["herokuapp.com", "herokussl.com"],
-    "fingerprint": "no-such-app.html",
-    "nxdomain": false,
-    "vulnerable": true
-  },
-  {
-    "service": "AWS S3",
-    "cname": ["s3.amazonaws.com"],
-    "fingerprint": "NoSuchBucket",
-    "nxdomain": true,
-    "vulnerable": true
-  },
-  {
-    "service": "AWS CloudFront",
-    "cname": ["cloudfront.net"],
-    "fingerprint": "could not be satisfied",
+    "fingerprint": "No such app",
+    "http_status": null,
     "nxdomain": false,
     "vulnerable": true
   },
@@ -89,7 +335,40 @@
     "service": "Shopify",
     "cname": ["myshopify.com"],
     "fingerprint": "Sorry, this shop is currently unavailable",
+    "http_status": null,
     "nxdomain": false,
     "vulnerable": true
+  },
+  {
+    "service": "Digital Ocean",
+    "cname": [],
+    "fingerprint": "Domain uses DO name servers with no records in DO.",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "Smugmug",
+    "cname": [],
+    "fingerprint": "",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": true
+  },
+  {
+    "service": "AWS/Load Balancer (ELB)",
+    "cname": ["elb.amazonaws.com"],
+    "fingerprint": "NXDOMAIN",
+    "http_status": null,
+    "nxdomain": true,
+    "vulnerable": false
+  },
+  {
+    "service": "Cloudfront",
+    "cname": ["cloudfront.net"],
+    "fingerprint": "ViewerCertificateException",
+    "http_status": null,
+    "nxdomain": false,
+    "vulnerable": false
   }
 ]

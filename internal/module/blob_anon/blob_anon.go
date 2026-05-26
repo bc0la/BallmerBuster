@@ -11,6 +11,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
+
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/storage/armstorage"
 
 	"github.com/you/ballmerbuster/internal/creds"
@@ -32,8 +35,8 @@ func (Module) Requires() []string {
 }
 
 const (
-	probeTimeout = 10 * time.Second
-	probeWorkers = 10
+	probeTimeout         = 10 * time.Second
+	probeWorkers         = 10
 	maxBlobsPerContainer = 20
 )
 
@@ -76,6 +79,10 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 			continue
 		}
 
+		// Authenticated blob client for walking container contents.
+		blobServiceURL := fmt.Sprintf("https://%s.blob.core.windows.net/", acctName)
+		blobClient, blobErr := azblob.NewClient(blobServiceURL, target.Credential, nil)
+
 		cPager := containerClient.NewListPager(rg, acctName, nil)
 		for cPager.More() {
 			cPage, err := cPager.NextPage(ctx)
@@ -97,17 +104,23 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 				_ = sink.LogEvent(ctx, "blob_anon", target.SubscriptionID, "info",
 					fmt.Sprintf("%s/%s: public_access=%s — probing", acctName, containerName, access))
 
+				// 1. Probe anonymous listing.
 				listInfo := probeAnonList(ctx, acctName, containerName)
 
-				var blobHits []anonBlobHit
-				if access == armstorage.PublicAccessBlob || access == armstorage.PublicAccessContainer {
-					var keys []string
-					if listInfo.listable {
-						keys = listInfo.sampleKeys
-					}
-					if len(keys) > 0 {
-						blobHits = probeBlobs(ctx, acctName, containerName, keys)
-					}
+				// 2. Walk container with authenticated creds to get blob names.
+				var blobKeys []string
+				if blobErr == nil {
+					blobKeys = walkContainer(ctx, blobClient, containerName)
+					_ = sink.LogEvent(ctx, "blob_anon", target.SubscriptionID, "info",
+						fmt.Sprintf("%s/%s: walked %d blobs via authenticated client",
+							acctName, containerName, len(blobKeys)))
+				}
+
+				// 3. Probe each blob anonymously.
+				blobHits := probeBlobs(ctx, acctName, containerName, blobKeys)
+
+				if !listInfo.listable && len(blobHits) == 0 {
+					continue
 				}
 
 				sev := findings.SevHigh
@@ -118,20 +131,22 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 				var title string
 				switch {
 				case listInfo.listable && len(blobHits) > 0:
-					title = fmt.Sprintf("Storage %s/%s: anonymously listable + %d readable blob(s)", acctName, containerName, len(blobHits))
+					title = fmt.Sprintf("Storage %s/%s: anonymously listable + %d readable blob(s)",
+						acctName, containerName, len(blobHits))
 				case listInfo.listable:
-					title = fmt.Sprintf("Storage %s/%s: anonymously listable", acctName, containerName)
-				case len(blobHits) > 0:
-					title = fmt.Sprintf("Storage %s/%s: %d anonymously-readable blob(s)", acctName, containerName, len(blobHits))
+					title = fmt.Sprintf("Storage %s/%s: anonymously listable",
+						acctName, containerName)
 				default:
-					title = fmt.Sprintf("Storage %s/%s: public access level %s", acctName, containerName, access)
+					title = fmt.Sprintf("Storage %s/%s: %d anonymously-readable blob(s)",
+						acctName, containerName, len(blobHits))
 				}
 
 				detail := map[string]any{
-					"account_name":       acctName,
-					"container_name":     containerName,
-					"public_access":      string(access),
+					"account_name":         acctName,
+					"container_name":       containerName,
+					"public_access":        string(access),
 					"anonymously_listable": listInfo.listable,
+					"blobs_walked":         len(blobKeys),
 				}
 
 				var curls []string
@@ -178,6 +193,29 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 	return nil
 }
 
+// walkContainer lists blob names using authenticated credentials.
+func walkContainer(ctx context.Context, client *azblob.Client, containerName string) []string {
+	var keys []string
+	pager := client.NewListBlobsFlatPager(containerName, &container.ListBlobsFlatOptions{
+		MaxResults: ptrTo(int32(maxBlobsPerContainer)),
+	})
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			break
+		}
+		for _, b := range page.Segment.BlobItems {
+			if b.Name != nil {
+				keys = append(keys, *b.Name)
+			}
+			if len(keys) >= maxBlobsPerContainer {
+				return keys
+			}
+		}
+	}
+	return keys
+}
+
 type anonListInfo struct {
 	listable   bool
 	curl       string
@@ -185,9 +223,9 @@ type anonListInfo struct {
 	totalSeen  int
 }
 
-func probeAnonList(ctx context.Context, account, container string) anonListInfo {
+func probeAnonList(ctx context.Context, account, containerName string) anonListInfo {
 	u := fmt.Sprintf("https://%s.blob.core.windows.net/%s?restype=container&comp=list&maxresults=%d",
-		account, container, maxBlobsPerContainer)
+		account, containerName, maxBlobsPerContainer)
 	info := anonListInfo{curl: fmt.Sprintf("curl -s '%s'", u)}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -234,7 +272,7 @@ type anonBlobHit struct {
 	curl        string
 }
 
-func probeBlobs(ctx context.Context, account, container string, keys []string) []anonBlobHit {
+func probeBlobs(ctx context.Context, account, containerName string, keys []string) []anonBlobHit {
 	if len(keys) == 0 {
 		return nil
 	}
@@ -257,7 +295,7 @@ func probeBlobs(ctx context.Context, account, container string, keys []string) [
 		go func() {
 			defer wg.Done()
 			for j := range jobs {
-				if h, found := probeOneBlob(ctx, account, container, j.key); found {
+				if h, found := probeOneBlob(ctx, account, containerName, j.key); found {
 					results[j.idx] = h
 					ok[j.idx] = true
 				}
@@ -288,33 +326,40 @@ func collectHits(results []anonBlobHit, ok []bool) []anonBlobHit {
 	return hits
 }
 
-func probeOneBlob(ctx context.Context, account, container, key string) (anonBlobHit, bool) {
-	u := blobURL(account, container, key)
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, u, nil)
+func probeOneBlob(ctx context.Context, account, containerName, key string) (anonBlobHit, bool) {
+	u := blobURL(account, containerName, key)
+	curl := fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' '%s'", u)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return anonBlobHit{}, false
 	}
+	req.Header.Set("Range", "bytes=0-0")
 	resp, err := anonClient.Do(req)
 	if err != nil {
 		return anonBlobHit{}, false
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 		return anonBlobHit{}, false
+	}
+	size := resp.Header.Get("Content-Range")
+	if size == "" {
+		size = resp.Header.Get("Content-Length")
 	}
 	return anonBlobHit{
 		key:         key,
 		url:         u,
 		status:      resp.StatusCode,
 		contentType: resp.Header.Get("Content-Type"),
-		size:        resp.Header.Get("Content-Length"),
-		curl:        fmt.Sprintf("curl -sI '%s'", u),
+		size:        size,
+		curl:        curl,
 	}, true
 }
 
-func blobURL(account, container, key string) string {
+func blobURL(account, containerName, key string) string {
 	return fmt.Sprintf("https://%s.blob.core.windows.net/%s/%s",
-		account, container, url.PathEscape(key))
+		account, containerName, url.PathEscape(key))
 }
 
 func resourceGroup(id string) string {
@@ -334,3 +379,5 @@ func ptrVal[T any](p *T) T {
 	}
 	return *p
 }
+
+func ptrTo[T any](v T) *T { return &v }
