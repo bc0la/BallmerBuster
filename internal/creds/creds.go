@@ -26,10 +26,19 @@ type Options struct {
 	ManagementGroup string
 }
 
+func newCredential() (azcore.TokenCredential, error) {
+	// Try Azure CLI first — most common for interactive use.
+	if cli, err := azidentity.NewAzureCLICredential(nil); err == nil {
+		return cli, nil
+	}
+	// Fall back to the full chain (env vars, managed identity, etc).
+	return azidentity.NewDefaultAzureCredential(nil)
+}
+
 func Detect(ctx context.Context, opts Options) ([]SubscriptionTarget, error) {
-	cred, err := azidentity.NewDefaultAzureCredential(nil)
+	cred, err := newCredential()
 	if err != nil {
-		return nil, fmt.Errorf("azure auth: %w", err)
+		return nil, fmt.Errorf("azure auth failed — run `az login` or set AZURE_TENANT_ID + AZURE_CLIENT_ID + AZURE_CLIENT_SECRET: %w", err)
 	}
 
 	if len(opts.Subscriptions) > 0 {
@@ -60,7 +69,7 @@ func Detect(ctx context.Context, opts Options) ([]SubscriptionTarget, error) {
 	// otherwise pick the first one.
 	subs, err := listSubscriptions(ctx, cred)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w\n\nhint: authenticate with one of:\n  az login                                          (interactive)\n  export AZURE_TENANT_ID=... AZURE_CLIENT_ID=... AZURE_CLIENT_SECRET=...  (service principal)", err)
 	}
 	if len(subs) == 0 {
 		return nil, fmt.Errorf("no accessible subscriptions found")
