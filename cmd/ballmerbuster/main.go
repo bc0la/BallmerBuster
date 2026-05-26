@@ -25,6 +25,7 @@ import (
 	_ "github.com/you/ballmerbuster/internal/module/blob_anon"
 	_ "github.com/you/ballmerbuster/internal/module/entra_id"
 	_ "github.com/you/ballmerbuster/internal/module/function_app_env"
+	_ "github.com/you/ballmerbuster/internal/module/iam_integrations"
 	_ "github.com/you/ballmerbuster/internal/module/keyvault_exposure"
 	_ "github.com/you/ballmerbuster/internal/module/nsg_exposure"
 	_ "github.com/you/ballmerbuster/internal/module/public_sql"
