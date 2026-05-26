@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -221,57 +222,33 @@ func probeCNAME(ctx context.Context, client *http.Client, host string) probeResu
 		return probeResult{Err: err}
 	}
 
-	// Host resolves — attempt HTTP probe.
-	url := "http://" + host
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return probeResult{Err: err}
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return probeResult{Err: err}
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-	return probeResult{
-		HTTPStatus: resp.StatusCode,
-		Body:       string(body),
-	}
-}
-
-// isNXDomain checks whether a DNS lookup error indicates NXDOMAIN.
-func isNXDomain(err error) bool {
-	var dnsErr *net.DNSError
-	if ok := errorAs(err, &dnsErr); ok {
-		return dnsErr.IsNotFound
-	}
-	// Fallback: check error string.
-	msg := err.Error()
-	return strings.Contains(msg, "no such host") || strings.Contains(msg, "NXDOMAIN")
-}
-
-// errorAs is a thin wrapper so we don't shadow "errors" import just for this.
-func errorAs(err error, target any) bool {
-	// Use the interface approach to avoid importing errors package separately.
-	type unwrapper interface {
-		Unwrap() error
-	}
-	switch t := target.(type) {
-	case **net.DNSError:
-		for e := err; e != nil; {
-			if de, ok := e.(*net.DNSError); ok {
-				*t = de
-				return true
-			}
-			if u, ok := e.(unwrapper); ok {
-				e = u.Unwrap()
-			} else {
-				return false
-			}
+	// Host resolves — attempt HTTP probe (HTTPS first, then HTTP).
+	for _, scheme := range []string{"https", "http"} {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, scheme+"://"+host+"/", nil)
+		if err != nil {
+			continue
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+		resp.Body.Close()
+		return probeResult{
+			HTTPStatus: resp.StatusCode,
+			Body:       string(body),
 		}
 	}
-	return false
+	return probeResult{Err: fmt.Errorf("HTTP probe failed for %s", host)}
+}
+
+func isNXDomain(err error) bool {
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return dnsErr.IsNotFound
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "no such host") || strings.Contains(msg, "NXDOMAIN")
 }
 
 // matchNXDomainFingerprint returns the first fingerprint whose CNAME

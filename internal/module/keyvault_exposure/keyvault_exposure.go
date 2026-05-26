@@ -80,8 +80,26 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 		props := vault.Properties
 
 		// --- Network exposure checks ---
-		publicNetwork := isPublicAccess(props)
+		exposure := checkNetworkExposure(props)
+		publicNetwork := exposure.public
 		permissiveCount := countOverlyPermissivePolicies(props)
+
+		if exposure.bypassAzure && !publicNetwork {
+			_ = sink.Write(ctx, findings.Finding{
+				SubscriptionID: target.SubscriptionID,
+				Region:         ref.Location,
+				Module:         "keyvault_exposure",
+				Severity:       findings.SevMedium,
+				ResourceID:     ref.ID,
+				Title:          fmt.Sprintf("Key Vault %s bypasses firewall for Azure services", ref.Name),
+				Detail: map[string]any{
+					"vault_name":          ref.Name,
+					"default_action":      "Deny",
+					"bypass":              "AzureServices",
+					"public_network":      false,
+				},
+			})
+		}
 
 		if publicNetwork && permissiveCount > 0 {
 			// High: public access combined with overly permissive policies.
@@ -172,21 +190,36 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 	return nil
 }
 
+// networkExposure describes how a vault is exposed.
+type networkExposure struct {
+	public        bool
+	bypassAzure   bool
+}
+
+// checkNetworkExposure evaluates the vault's network configuration.
+func checkNetworkExposure(props *armkeyvault.VaultProperties) networkExposure {
+	if props.PublicNetworkAccess != nil && strings.EqualFold(*props.PublicNetworkAccess, "Disabled") {
+		return networkExposure{}
+	}
+	if props.NetworkACLs == nil {
+		return networkExposure{public: true}
+	}
+	acls := props.NetworkACLs
+	if acls.DefaultAction == nil || *acls.DefaultAction == armkeyvault.NetworkRuleActionAllow {
+		return networkExposure{public: true}
+	}
+	// DefaultAction is Deny — check if Bypass allows AzureServices.
+	bypass := false
+	if acls.Bypass != nil && *acls.Bypass == armkeyvault.NetworkRuleBypassOptionsAzureServices {
+		bypass = true
+	}
+	return networkExposure{bypassAzure: bypass}
+}
+
 // isPublicAccess returns true when the vault's network configuration allows
 // unrestricted public access.
 func isPublicAccess(props *armkeyvault.VaultProperties) bool {
-	// Check explicit PublicNetworkAccess property.
-	if props.PublicNetworkAccess != nil && strings.EqualFold(*props.PublicNetworkAccess, "Disabled") {
-		return false
-	}
-	// If NetworkAcls is nil or DefaultAction is Allow, it's public.
-	if props.NetworkACLs == nil {
-		return true
-	}
-	if props.NetworkACLs.DefaultAction == nil || *props.NetworkACLs.DefaultAction == armkeyvault.NetworkRuleActionAllow {
-		return true
-	}
-	return false
+	return checkNetworkExposure(props).public
 }
 
 // countOverlyPermissivePolicies counts access policies where any permission

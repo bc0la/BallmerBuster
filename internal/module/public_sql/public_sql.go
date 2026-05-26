@@ -111,8 +111,11 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 
 			// TCP probe for reachability when publicly accessible.
 			tcpReachable := false
-			if publicAccess && fqdn != "" && sev == findings.SevCritical {
+			if publicAccess && fqdn != "" {
 				tcpReachable = probeTCP(ctx, fqdn, "1433", 3*time.Second)
+				if tcpReachable && sev != findings.SevCritical {
+					sev = findings.SevHigh
+				}
 			}
 
 			detail := map[string]any{

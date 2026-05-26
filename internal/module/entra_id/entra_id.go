@@ -371,13 +371,15 @@ var dangerousScopeSeverity = map[string]findings.Severity{
 }
 
 func checkOAuth2PermissionGrants(ctx context.Context, target creds.SubscriptionTarget, emit func(findings.Finding), log func(string, string)) error {
-	const url = "https://graph.microsoft.com/v1.0/oauth2PermissionGrants?$filter=consentType eq 'AllPrincipals'"
+	// Fetch all permission grants (not just AllPrincipals) to catch dangerous
+	// single-principal grants too.
+	const url = "https://graph.microsoft.com/v1.0/oauth2PermissionGrants"
 	raw, err := graphList(ctx, target.Credential, url)
 	if err != nil {
 		return err
 	}
 
-	log("info", fmt.Sprintf("found %d admin-consented permission grants", len(raw)))
+	log("info", fmt.Sprintf("found %d OAuth2 permission grants", len(raw)))
 
 	for _, r := range raw {
 		var grant oauth2PermissionGrant
@@ -392,11 +394,19 @@ func checkOAuth2PermissionGrants(ctx context.Context, target creds.SubscriptionT
 				continue
 			}
 
+			consentLabel := "admin-consented (all principals)"
+			if grant.ConsentType != "AllPrincipals" {
+				consentLabel = fmt.Sprintf("principal-consented (%s)", grant.ConsentType)
+				if sev == findings.SevCritical {
+					sev = findings.SevHigh
+				}
+			}
+
 			emit(findings.Finding{
 				Region:     "global",
 				Severity:   sev,
 				ResourceID: fmt.Sprintf("/tenants/%s/oauth2PermissionGrants/%s", target.TenantID, grant.ID),
-				Title:      fmt.Sprintf("Admin-consented dangerous scope %q granted to service principal %s", scope, grant.ClientID),
+				Title:      fmt.Sprintf("Dangerous scope %q %s to service principal %s", scope, consentLabel, grant.ClientID),
 				Detail: map[string]any{
 					"tenant_id":    target.TenantID,
 					"grant_id":     grant.ID,
