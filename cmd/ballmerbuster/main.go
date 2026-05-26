@@ -21,16 +21,22 @@ import (
 	"github.com/you/ballmerbuster/internal/tui"
 
 	// Side-effect imports to register modules.
+	_ "github.com/you/ballmerbuster/internal/module/aci_env"
 	_ "github.com/you/ballmerbuster/internal/module/acr_exposure"
+	_ "github.com/you/ballmerbuster/internal/module/arm_deployments"
+	_ "github.com/you/ballmerbuster/internal/module/automation_accounts"
 	_ "github.com/you/ballmerbuster/internal/module/blob_anon"
+	_ "github.com/you/ballmerbuster/internal/module/devops_secrets"
 	_ "github.com/you/ballmerbuster/internal/module/entra_id"
 	_ "github.com/you/ballmerbuster/internal/module/function_app_env"
 	_ "github.com/you/ballmerbuster/internal/module/iam_integrations"
 	_ "github.com/you/ballmerbuster/internal/module/keyvault_exposure"
+	_ "github.com/you/ballmerbuster/internal/module/logic_apps"
 	_ "github.com/you/ballmerbuster/internal/module/nsg_exposure"
 	_ "github.com/you/ballmerbuster/internal/module/public_sql"
 	_ "github.com/you/ballmerbuster/internal/module/rbac_review"
 	_ "github.com/you/ballmerbuster/internal/module/subdomain_takeover"
+	_ "github.com/you/ballmerbuster/internal/module/vm_userdata"
 )
 
 func main() {
