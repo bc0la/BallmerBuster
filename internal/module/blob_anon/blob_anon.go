@@ -82,6 +82,10 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 		// Authenticated blob client for walking container contents.
 		blobServiceURL := fmt.Sprintf("https://%s.blob.core.windows.net/", acctName)
 		blobClient, blobErr := azblob.NewClient(blobServiceURL, target.Credential, nil)
+		if blobErr != nil {
+			_ = sink.LogEvent(ctx, "blob_anon", target.SubscriptionID, "warn",
+				fmt.Sprintf("create blob client for %s: %v (will skip authenticated walk)", acctName, blobErr))
+		}
 
 		cPager := containerClient.NewListPager(rg, acctName, nil)
 		for cPager.More() {
@@ -92,28 +96,33 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 				break
 			}
 			for _, c := range cPage.Value {
-				if c.Properties == nil || c.Properties.PublicAccess == nil {
-					continue
-				}
-				access := *c.Properties.PublicAccess
-				if access == armstorage.PublicAccessNone {
-					continue
+				var access string
+				if c.Properties != nil && c.Properties.PublicAccess != nil {
+					access = string(*c.Properties.PublicAccess)
 				}
 
 				containerName := ptrVal(c.Name)
 				_ = sink.LogEvent(ctx, "blob_anon", target.SubscriptionID, "info",
-					fmt.Sprintf("%s/%s: public_access=%s — probing", acctName, containerName, access))
+					fmt.Sprintf("%s/%s: public_access=%q — probing anonymously", acctName, containerName, access))
 
-				// 1. Probe anonymous listing.
+				// 1. Always probe anonymous listing regardless of ARM config.
+				// The probe is ground truth; config can be stale or misleading.
 				listInfo := probeAnonList(ctx, acctName, containerName)
 
 				// 2. Walk container with authenticated creds to get blob names.
 				var blobKeys []string
 				if blobErr == nil {
-					blobKeys = walkContainer(ctx, blobClient, containerName)
-					_ = sink.LogEvent(ctx, "blob_anon", target.SubscriptionID, "info",
-						fmt.Sprintf("%s/%s: walked %d blobs via authenticated client",
-							acctName, containerName, len(blobKeys)))
+					var walkErr error
+					blobKeys, walkErr = walkContainer(ctx, blobClient, containerName)
+					if walkErr != nil {
+						_ = sink.LogEvent(ctx, "blob_anon", target.SubscriptionID, "warn",
+							fmt.Sprintf("%s/%s: walk error: %v (got %d blobs before failure)",
+								acctName, containerName, walkErr, len(blobKeys)))
+					} else {
+						_ = sink.LogEvent(ctx, "blob_anon", target.SubscriptionID, "info",
+							fmt.Sprintf("%s/%s: walked %d blobs, probing anonymously",
+								acctName, containerName, len(blobKeys)))
+					}
 				}
 
 				// 3. Probe each blob anonymously.
@@ -193,8 +202,7 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 	return nil
 }
 
-// walkContainer lists blob names using authenticated credentials.
-func walkContainer(ctx context.Context, client *azblob.Client, containerName string) []string {
+func walkContainer(ctx context.Context, client *azblob.Client, containerName string) ([]string, error) {
 	var keys []string
 	pager := client.NewListBlobsFlatPager(containerName, &container.ListBlobsFlatOptions{
 		MaxResults: ptrTo(int32(maxBlobsPerContainer)),
@@ -202,18 +210,18 @@ func walkContainer(ctx context.Context, client *azblob.Client, containerName str
 	for pager.More() {
 		page, err := pager.NextPage(ctx)
 		if err != nil {
-			break
+			return keys, err
 		}
 		for _, b := range page.Segment.BlobItems {
 			if b.Name != nil {
 				keys = append(keys, *b.Name)
 			}
 			if len(keys) >= maxBlobsPerContainer {
-				return keys
+				return keys, nil
 			}
 		}
 	}
-	return keys
+	return keys, nil
 }
 
 type anonListInfo struct {
