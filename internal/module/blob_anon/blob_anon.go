@@ -102,20 +102,14 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 				}
 
 				containerName := ptrVal(c.Name)
-				configPublic := access != "" && access != string(armstorage.PublicAccessNone)
-
-				if !configPublic {
-					continue
-				}
-
 				_ = sink.LogEvent(ctx, "blob_anon", target.SubscriptionID, "info",
-					fmt.Sprintf("%s/%s: public_access=%q — probing", acctName, containerName, access))
+					fmt.Sprintf("%s/%s: public_access=%q — probing anonymously", acctName, containerName, access))
 
-				// 1. Probe anonymous listing.
+				// 1. Always probe anonymous listing regardless of ARM config.
+				// The probe is ground truth; config can be stale or misleading.
 				listInfo := probeAnonList(ctx, acctName, containerName)
 
-				// 2. Walk container with authenticated creds to get blob names
-				// for per-blob anonymous probing.
+				// 2. Walk container with authenticated creds to get blob names.
 				var blobKeys []string
 				if blobErr == nil {
 					var walkErr error
@@ -134,7 +128,13 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 				// 3. Probe each blob anonymously.
 				blobHits := probeBlobs(ctx, acctName, containerName, blobKeys)
 
-				// configPublic is always true here (filtered above).
+				// Determine severity and title.
+				// ARM config is the primary signal; probes upgrade severity.
+				configPublic := access != "" && access != string(armstorage.PublicAccessNone)
+
+				if !configPublic && !listInfo.listable && len(blobHits) == 0 {
+					continue
+				}
 
 				var sev findings.Severity
 				var title string
