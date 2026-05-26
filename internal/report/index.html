@@ -1,102 +1,406 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>BallmerBuster Report</title>
+<title>BallmerBuster report</title>
 <style>
-  :root { --bg: #0d1117; --fg: #c9d1d9; --card: #161b22; --border: #30363d; --accent: #58a6ff; --crit: #f85149; --high: #d29922; --med: #3fb950; --low: #8b949e; }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace; background: var(--bg); color: var(--fg); padding: 1rem; }
-  h1 { color: var(--accent); margin-bottom: 1rem; font-size: 1.4rem; }
-  .summary { display: flex; gap: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
-  .summary .badge { padding: 0.3rem 0.8rem; border-radius: 4px; font-weight: bold; font-size: 0.85rem; }
-  .sev-critical { background: var(--crit); color: #fff; }
-  .sev-high { background: var(--high); color: #000; }
-  .sev-medium { background: var(--med); color: #000; }
-  .sev-low { background: var(--low); color: #000; }
-  .sev-info { background: var(--border); color: var(--fg); }
-  .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 1rem; }
-  .tab { padding: 0.5rem 1rem; cursor: pointer; border-bottom: 2px solid transparent; color: var(--low); }
-  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-  .tab:hover { color: var(--fg); }
-  .findings { display: flex; flex-direction: column; gap: 0.5rem; }
-  .finding { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 0.8rem; }
-  .finding .title { font-weight: bold; margin-bottom: 0.3rem; }
-  .finding .meta { font-size: 0.8rem; color: var(--low); }
-  .finding details { margin-top: 0.5rem; }
-  .finding pre { background: var(--bg); padding: 0.5rem; border-radius: 4px; overflow-x: auto; font-size: 0.8rem; margin-top: 0.3rem; }
-  #loading { color: var(--low); }
+  :root { color-scheme: dark; }
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 0; background: #111; color: #eee; }
+  header { padding: 16px 24px; border-bottom: 1px solid #333; background: #181818; }
+  header h1 { margin: 0 0 8px; font-size: 18px; }
+  nav { display: flex; flex-wrap: wrap; gap: 4px; }
+  nav button { background: #222; color: #eee; border: 1px solid #333; padding: 6px 12px; cursor: pointer; font: inherit; }
+  nav button.active { background: #2a4d69; border-color: #3a6d99; }
+  main { padding: 16px 24px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid #222; text-align: left; vertical-align: top; overflow: hidden; text-overflow: ellipsis; }
+  th { background: #1a1a1a; position: sticky; top: 0; cursor: pointer; user-select: none; }
+  th .resizer { position: absolute; right: 0; top: 0; width: 5px; height: 100%; cursor: col-resize; background: transparent; }
+  th .resizer:hover, th .resizer.active { background: #3a6d99; }
+  tr:hover { background: #1a1a1a; }
+  tr.hidden-row { display: none; }
+  .sev-critical { color: #ff5b5b; font-weight: bold; }
+  .sev-high     { color: #ff9a3c; font-weight: bold; }
+  .sev-medium   { color: #ffd166; }
+  .sev-low      { color: #99d98c; }
+  .sev-info     { color: #7f8bd6; }
+  details { margin: 0; }
+  pre { white-space: pre-wrap; word-break: break-word; background: #0c0c0c; padding: 8px; border: 1px solid #222; max-height: 400px; overflow: auto; }
+  .summary { display: flex; gap: 24px; margin-bottom: 16px; flex-wrap: wrap; }
+  .summary div { background: #1a1a1a; padding: 8px 14px; border: 1px solid #2a2a2a; }
+  input[type=search] { background: #0c0c0c; color: #eee; border: 1px solid #333; padding: 6px 8px; width: 300px; margin-bottom: 8px; }
+  .curl-block { position: relative; margin: 4px 0; }
+  .curl-block code { display: block; background: #0a0a0a; color: #7ec; padding: 6px 60px 6px 8px; border: 1px solid #333; font: 12px/1.4 monospace; white-space: pre-wrap; word-break: break-all; }
+  .curl-block button { position: absolute; top: 4px; right: 4px; background: #333; color: #eee; border: 1px solid #555; padding: 2px 8px; cursor: pointer; font-size: 11px; }
+  .curl-block button:hover { background: #555; }
+  .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  .toolbar .btn { background: #2a4d69; color: #eee; border: 1px solid #3a6d99; padding: 6px 14px; cursor: pointer; font: inherit; }
+  .toolbar .btn:hover { background: #3a6d99; }
+  .toolbar .btn-warn { background: #693a2a; border-color: #994d3a; }
+  .toolbar .btn-warn:hover { background: #994d3a; }
+  .hide-btn { background: #333; color: #999; border: 1px solid #555; padding: 1px 6px; cursor: pointer; font-size: 11px; margin-left: 4px; }
+  .hide-btn:hover { background: #555; color: #eee; }
+  .hidden-count { color: #777; font-size: 12px; margin-left: 8px; }
 </style>
 </head>
 <body>
-<h1>BallmerBuster</h1>
-<div class="summary" id="summary"></div>
-<div class="tabs" id="tabs"></div>
-<div class="findings" id="findings"></div>
-<div id="loading">loading…</div>
+<header>
+  <h1>BallmerBuster report</h1>
+  <nav id="tabs"></nav>
+</header>
+<main>
+  <div class="summary" id="summary"></div>
+  <div class="toolbar">
+    <input type="search" id="filter" placeholder="filter...">
+    <button class="btn" id="export-curls" onclick="exportCurls()" style="display:none">Export curls</button>
+    <button class="btn" id="export-raw" onclick="exportRaw()" style="display:none">Export JSON</button>
+    <button class="btn" id="export-assets" onclick="exportAssets()" style="display:none">Export assets</button>
+    <button class="btn btn-warn" id="restore-hidden" onclick="restoreHidden()" style="display:none">Restore hidden</button>
+    <span class="hidden-count" id="hidden-count"></span>
+  </div>
+  <div id="content"></div>
+</main>
 <script>
-const sevOrder = {critical:0, high:1, medium:2, low:3, info:4};
-let currentModule = null;
+let currentModule = "";
+let allFindings = [];
+
+const HIDDEN_KEY = 'bb_hidden_findings';
+function getHidden() {
+  try { return JSON.parse(localStorage.getItem(HIDDEN_KEY) || '{}'); } catch { return {}; }
+}
+function setHidden(h) { localStorage.setItem(HIDDEN_KEY, JSON.stringify(h)); }
+function hideFinding(id) {
+  const h = getHidden(); h[id] = true; setHidden(h);
+  const row = document.getElementById('row-' + id);
+  if (row) row.classList.add('hidden-row');
+  updateHiddenUI();
+}
+function restoreHidden() {
+  if (!currentModule) { const h = getHidden(); for (const k in h) delete h[k]; setHidden(h); }
+  else {
+    const h = getHidden();
+    for (const f of allFindings) { if (f.module === currentModule || !currentModule) delete h[f.id]; }
+    setHidden(h);
+  }
+  render();
+}
+function updateHiddenUI() {
+  const h = getHidden();
+  const relevant = allFindings.filter(f => h[f.id]);
+  const countEl = document.getElementById('hidden-count');
+  const restoreEl = document.getElementById('restore-hidden');
+  if (relevant.length > 0) {
+    countEl.textContent = relevant.length + ' hidden';
+    restoreEl.style.display = '';
+  } else {
+    countEl.textContent = '';
+    restoreEl.style.display = 'none';
+  }
+}
 
 async function loadSummary() {
-  const resp = await fetch('/api/summary');
-  const data = await resp.json();
-  const el = document.getElementById('summary');
-  if (data.severity) {
-    for (const sev of ['critical','high','medium','low','info']) {
-      if (data.severity[sev]) {
-        const b = document.createElement('span');
-        b.className = 'badge sev-' + sev;
-        b.textContent = sev + ': ' + data.severity[sev];
-        el.appendChild(b);
+  const r = await fetch('/api/summary').then(r => r.json());
+  const tabs = document.getElementById('tabs');
+  tabs.innerHTML = '';
+  const mkBtn = (label, mod) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.onclick = () => { currentModule = mod; loadFindings(); renderTabs(); };
+    if (mod === currentModule) b.classList.add('active');
+    return b;
+  };
+  tabs.appendChild(mkBtn('All', ''));
+  (r.modules || []).forEach(m => tabs.appendChild(mkBtn(`${m.module} (${m.count})`, m.module)));
+  const s = document.getElementById('summary');
+  s.innerHTML = '';
+  Object.entries(r.severity || {}).forEach(([k, v]) => {
+    const d = document.createElement('div');
+    d.className = 'sev-' + k;
+    d.textContent = `${k}: ${v}`;
+    s.appendChild(d);
+  });
+}
+
+function renderTabs() {
+  document.querySelectorAll('#tabs button').forEach(b => {
+    b.classList.toggle('active', (b.textContent.startsWith('All') ? '' : b.textContent.split(' ')[0]) === currentModule);
+  });
+}
+
+async function loadFindings() {
+  currentTable = null;
+  const qs = currentModule ? `?module=${encodeURIComponent(currentModule)}` : '';
+  allFindings = await fetch('/api/findings' + qs).then(r => r.json()) || [];
+  document.getElementById('export-curls').style.display = allFindings.some(f => f.detail && f.detail.curl) ? '' : 'none';
+  document.getElementById('export-raw').style.display = currentModule ? '' : 'none';
+  document.getElementById('export-assets').style.display = currentModule ? '' : 'none';
+  render();
+}
+
+const colDefs = [
+  {name: '', width: 30},
+  {name: 'severity', width: 80},
+  {name: 'subscription', width: 110},
+  {name: 'region', width: 120},
+  {name: 'module', width: 130},
+  {name: 'title', width: 400},
+  {name: 'resource', width: 250},
+  {name: 'raw', width: 50},
+  {name: 'detail', width: 80}
+];
+const colWidths = colDefs.map(c => c.width);
+let currentTable = null;
+
+function buildTableHeader() {
+  const tbl = document.createElement('table');
+  const thead = document.createElement('thead');
+  const headerRow = document.createElement('tr');
+  const ths = colDefs.map((col, ci) => {
+    const th = document.createElement('th');
+    th.textContent = col.name;
+    th.style.width = colWidths[ci] + 'px';
+    th.style.position = 'relative';
+    headerRow.appendChild(th);
+    return th;
+  });
+  ths.forEach((th, ci) => {
+    if (ci >= ths.length - 1) return;
+    const rightTh = ths[ci + 1];
+    const resizer = document.createElement('div');
+    resizer.className = 'resizer';
+    resizer.addEventListener('mousedown', e => {
+      e.preventDefault();
+      const startX = e.pageX;
+      const startW1 = colWidths[ci];
+      const startW2 = colWidths[ci + 1];
+      const minW = 30;
+      resizer.classList.add('active');
+      const onMove = e2 => {
+        let dx = e2.pageX - startX;
+        if (startW1 + dx < minW) dx = minW - startW1;
+        if (startW2 - dx < minW) dx = startW2 - minW;
+        const w1 = startW1 + dx;
+        const w2 = startW2 - dx;
+        th.style.width = w1 + 'px';
+        rightTh.style.width = w2 + 'px';
+        colWidths[ci] = w1;
+        colWidths[ci + 1] = w2;
+      };
+      const onUp = () => {
+        resizer.classList.remove('active');
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+    th.appendChild(resizer);
+  });
+  thead.appendChild(headerRow);
+  tbl.appendChild(thead);
+  return tbl;
+}
+
+function render() {
+  const filter = document.getElementById('filter').value.toLowerCase();
+  const hidden = getHidden();
+  const rows = allFindings.filter(f => !filter || JSON.stringify(f).toLowerCase().includes(filter));
+  const content = document.getElementById('content');
+  if (rows.length === 0) { content.textContent = 'no findings'; currentTable = null; updateHiddenUI(); return; }
+
+  if (!currentTable || !content.contains(currentTable)) {
+    currentTable = buildTableHeader();
+    content.innerHTML = '';
+    content.appendChild(currentTable);
+  }
+  const oldTbody = currentTable.querySelector('tbody');
+  if (oldTbody) oldTbody.remove();
+
+  const tbody = document.createElement('tbody');
+  const frag = document.createDocumentFragment();
+  for (const f of rows) {
+    const tr = document.createElement('tr');
+    tr.id = 'row-' + f.id;
+    if (hidden[f.id]) tr.classList.add('hidden-row');
+
+    // Hide button.
+    const hideCell = document.createElement('td');
+    const hideBtn = document.createElement('button');
+    hideBtn.className = 'hide-btn';
+    hideBtn.textContent = 'x';
+    hideBtn.title = 'Hide this finding';
+    hideBtn.onclick = () => hideFinding(f.id);
+    hideCell.appendChild(hideBtn);
+    tr.appendChild(hideCell);
+
+    // Severity.
+    const sevCell = document.createElement('td');
+    sevCell.className = 'sev-' + f.severity;
+    sevCell.textContent = f.severity;
+    tr.appendChild(sevCell);
+
+    // Subscription.
+    const subCell = document.createElement('td');
+    subCell.textContent = f.subscription_id;
+    tr.appendChild(subCell);
+
+    // Region.
+    const regCell = document.createElement('td');
+    regCell.textContent = f.region;
+    tr.appendChild(regCell);
+
+    // Module.
+    const modCell = document.createElement('td');
+    modCell.textContent = f.module;
+    tr.appendChild(modCell);
+
+    // Title + curls.
+    const titleCell = document.createElement('td');
+    titleCell.textContent = f.title;
+    if (f.detail && f.detail.curl) {
+      const curls = Array.isArray(f.detail.curl) ? f.detail.curl : [f.detail.curl];
+      for (const c of curls) {
+        const block = document.createElement('div');
+        block.className = 'curl-block';
+        const code = document.createElement('code');
+        code.textContent = c;
+        block.appendChild(code);
+        const btn = document.createElement('button');
+        btn.textContent = 'copy';
+        btn.onclick = () => navigator.clipboard.writeText(c).then(() => { btn.textContent = 'copied!'; setTimeout(() => btn.textContent = 'copy', 1500); });
+        block.appendChild(btn);
+        titleCell.appendChild(block);
+      }
+    }
+    tr.appendChild(titleCell);
+
+    // Resource.
+    const resCell = document.createElement('td');
+    resCell.textContent = f.resource_id || '';
+    tr.appendChild(resCell);
+
+    // Raw.
+    const rawCell = document.createElement('td');
+    if (f.raw_output_path) {
+      const a = document.createElement('a');
+      a.href = f.raw_output_path;
+      a.target = '_blank';
+      a.textContent = 'browse';
+      rawCell.appendChild(a);
+    }
+    tr.appendChild(rawCell);
+
+    // Detail.
+    const detCell = document.createElement('td');
+    const det = document.createElement('details');
+    const sum = document.createElement('summary');
+    sum.textContent = 'show';
+    det.appendChild(sum);
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(f.detail, null, 2);
+    det.appendChild(pre);
+    detCell.appendChild(det);
+    tr.appendChild(detCell);
+
+    frag.appendChild(tr);
+  }
+  tbody.appendChild(frag);
+  currentTable.appendChild(tbody);
+  updateHiddenUI();
+}
+
+function exportCurls() {
+  const lines = [];
+  const hidden = getHidden();
+  for (const f of allFindings) {
+    if (hidden[f.id]) continue;
+    if (!f.detail || !f.detail.curl) continue;
+    const curls = Array.isArray(f.detail.curl) ? f.detail.curl : [f.detail.curl];
+    lines.push('# ' + f.title + ' [' + f.severity + '] ' + f.subscription_id + ' ' + f.region);
+    for (const c of curls) lines.push(c);
+    lines.push('');
+  }
+  if (lines.length === 0) { alert('No curl commands found in visible findings.'); return; }
+  const blob = new Blob([lines.join('\n')], {type: 'text/plain'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'ballmerbuster-curls.txt';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function exportRaw() {
+  const hidden = getHidden();
+  const data = allFindings.filter(f => !hidden[f.id]);
+  if (data.length === 0) { alert('No visible findings to export.'); return; }
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'ballmerbuster-' + (currentModule || 'all') + '.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function extractAsset(f) {
+  const d = f.detail || {};
+  const mod = f.module;
+  switch (mod) {
+    case 'blob_anon':
+      if (d.list_curl) return d.list_curl;
+      if (d.curl) {
+        const curls = Array.isArray(d.curl) ? d.curl : [d.curl];
+        const urls = curls.map(c => { const m = c.match(/'([^']+)'/); return m ? m[1] : null; }).filter(Boolean);
+        if (urls.length) return urls.join('\n');
+      }
+      return d.account_name ? d.account_name + '/' + (d.container_name || '') : f.resource_id || '';
+    case 'public_sql':
+      return d.fqdn || d.server_name || f.resource_id || '';
+    case 'nsg_exposure':
+      return d.nsg_name ? d.nsg_name + ' / ' + (d.rule_name || '') : f.resource_id || '';
+    case 'function_app_env':
+      return d.app_name || f.resource_id || '';
+    case 'entra_id':
+      return d.display_name || d.app_id || f.resource_id || '';
+    case 'subdomain_takeover':
+      return d.record_name || d.cname || f.resource_id || '';
+    case 'keyvault_exposure':
+      return d.vault_name || f.resource_id || '';
+    case 'acr_exposure':
+      return d.registry_name || f.resource_id || '';
+    case 'rbac_review':
+      return d.role_name || d.principal_id || f.resource_id || '';
+    default:
+      return f.resource_id || f.title || '';
+  }
+}
+
+function exportAssets() {
+  const hidden = getHidden();
+  const seen = new Set();
+  const lines = [];
+  for (const f of allFindings) {
+    if (hidden[f.id]) continue;
+    const asset = extractAsset(f);
+    if (!asset) continue;
+    for (const line of asset.split('\n')) {
+      const trimmed = line.trim();
+      if (trimmed && !seen.has(trimmed)) {
+        seen.add(trimmed);
+        lines.push(trimmed);
       }
     }
   }
-  const tabs = document.getElementById('tabs');
-  const allTab = document.createElement('div');
-  allTab.className = 'tab active';
-  allTab.textContent = 'All';
-  allTab.onclick = () => loadFindings(null, allTab);
-  tabs.appendChild(allTab);
-  if (data.modules) {
-    for (const m of data.modules) {
-      if (m.count === 0) continue;
-      const t = document.createElement('div');
-      t.className = 'tab';
-      t.textContent = m.module + ' (' + m.count + ')';
-      t.onclick = () => loadFindings(m.module, t);
-      tabs.appendChild(t);
-    }
-  }
-  loadFindings(null, allTab);
+  if (lines.length === 0) { alert('No assets found in visible findings.'); return; }
+  const blob = new Blob([lines.join('\n') + '\n'], {type: 'text/plain'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'ballmerbuster-' + (currentModule || 'all') + '-assets.txt';
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
-async function loadFindings(mod, tabEl) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  if (tabEl) tabEl.classList.add('active');
-  currentModule = mod;
-  const url = mod ? '/api/findings?module=' + encodeURIComponent(mod) : '/api/findings';
-  const resp = await fetch(url);
-  const data = await resp.json();
-  const el = document.getElementById('findings');
-  document.getElementById('loading').style.display = 'none';
-  el.innerHTML = '';
-  if (!data || data.length === 0) { el.textContent = 'No findings.'; return; }
-  for (const f of data) {
-    const div = document.createElement('div');
-    div.className = 'finding';
-    div.innerHTML = '<div class="title"><span class="badge sev-' + f.severity + '">' + f.severity + '</span> ' + esc(f.title) + '</div>'
-      + '<div class="meta">' + esc(f.module) + ' | ' + esc(f.subscription_id) + (f.region ? ' | ' + esc(f.region) : '') + (f.resource_id ? ' | ' + esc(f.resource_id) : '') + '</div>'
-      + (f.detail ? '<details><summary>detail</summary><pre>' + esc(JSON.stringify(f.detail, null, 2)) + '</pre></details>' : '')
-      + (f.raw_output_path ? '<div class="meta"><a href="' + esc(f.raw_output_path) + '" style="color:var(--accent)">raw output</a></div>' : '');
-    el.appendChild(div);
-  }
-}
-
-function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
-
-loadSummary();
+document.getElementById('filter').addEventListener('input', render);
+loadSummary().then(loadFindings);
 </script>
 </body>
 </html>

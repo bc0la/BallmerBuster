@@ -2,10 +2,13 @@ package blob_anon
 
 import (
 	"context"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/storage/armstorage"
@@ -17,7 +20,6 @@ import (
 
 func init() { module.Register(Module{}) }
 
-// Module scans storage accounts for publicly accessible blob containers.
 type Module struct{}
 
 func (Module) Name() string      { return "blob_anon" }
@@ -29,6 +31,14 @@ func (Module) Requires() []string {
 	}
 }
 
+const (
+	probeTimeout = 10 * time.Second
+	probeWorkers = 10
+	maxBlobsPerContainer = 20
+)
+
+var anonClient = &http.Client{Timeout: probeTimeout}
+
 func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink findings.Sink) error {
 	acctClient, err := armstorage.NewAccountsClient(target.SubscriptionID, target.Credential, nil)
 	if err != nil {
@@ -39,7 +49,6 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 		return fmt.Errorf("blob_anon: create containers client: %w", err)
 	}
 
-	// Collect all storage accounts.
 	var accounts []*armstorage.Account
 	pager := acctClient.NewListPager(nil)
 	for pager.More() {
@@ -53,14 +62,11 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 	_ = sink.LogEvent(ctx, "blob_anon", target.SubscriptionID, "info",
 		fmt.Sprintf("scanning %d storage accounts", len(accounts)))
 
-	httpClient := &http.Client{Timeout: 5 * time.Second}
-
 	for i, acct := range accounts {
 		acctName := ptrVal(acct.Name)
 		_ = sink.LogEvent(ctx, "blob_anon", target.SubscriptionID, "info",
 			fmt.Sprintf("account %d/%d: %s", i+1, len(accounts), acctName))
 
-		// If AllowBlobPublicAccess is explicitly false, skip.
 		if acct.Properties != nil && acct.Properties.AllowBlobPublicAccess != nil && !*acct.Properties.AllowBlobPublicAccess {
 			continue
 		}
@@ -88,24 +94,72 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 				}
 
 				containerName := ptrVal(c.Name)
-				detail := map[string]any{
-					"account_name":     acctName,
-					"container_name":   containerName,
-					"public_access":    string(access),
-					"probe_listable":   false,
-					"probe_status":     "",
+				_ = sink.LogEvent(ctx, "blob_anon", target.SubscriptionID, "info",
+					fmt.Sprintf("%s/%s: public_access=%s — probing", acctName, containerName, access))
+
+				listInfo := probeAnonList(ctx, acctName, containerName)
+
+				var blobHits []anonBlobHit
+				if access == armstorage.PublicAccessBlob || access == armstorage.PublicAccessContainer {
+					var keys []string
+					if listInfo.listable {
+						keys = listInfo.sampleKeys
+					}
+					if len(keys) > 0 {
+						blobHits = probeBlobs(ctx, acctName, containerName, keys)
+					}
 				}
 
-				sev := findings.SevHigh // default for Blob-level access
+				sev := findings.SevHigh
+				if listInfo.listable {
+					sev = findings.SevCritical
+				}
 
-				if access == armstorage.PublicAccessContainer {
-					// Probe anonymous listing.
-					listable, status := probeAnonymousList(ctx, httpClient, acctName, containerName)
-					detail["probe_listable"] = listable
-					detail["probe_status"] = status
-					if listable {
-						sev = findings.SevCritical
+				var title string
+				switch {
+				case listInfo.listable && len(blobHits) > 0:
+					title = fmt.Sprintf("Storage %s/%s: anonymously listable + %d readable blob(s)", acctName, containerName, len(blobHits))
+				case listInfo.listable:
+					title = fmt.Sprintf("Storage %s/%s: anonymously listable", acctName, containerName)
+				case len(blobHits) > 0:
+					title = fmt.Sprintf("Storage %s/%s: %d anonymously-readable blob(s)", acctName, containerName, len(blobHits))
+				default:
+					title = fmt.Sprintf("Storage %s/%s: public access level %s", acctName, containerName, access)
+				}
+
+				detail := map[string]any{
+					"account_name":       acctName,
+					"container_name":     containerName,
+					"public_access":      string(access),
+					"anonymously_listable": listInfo.listable,
+				}
+
+				var curls []string
+
+				if listInfo.listable {
+					detail["list_curl"] = listInfo.curl
+					detail["list_sample_keys"] = listInfo.sampleKeys
+					detail["list_total_returned"] = listInfo.totalSeen
+					curls = append(curls, listInfo.curl)
+				}
+
+				if len(blobHits) > 0 {
+					objs := make([]map[string]any, 0, len(blobHits))
+					for _, h := range blobHits {
+						curls = append(curls, h.curl)
+						objs = append(objs, map[string]any{
+							"key":          h.key,
+							"url":          h.url,
+							"status":       h.status,
+							"content_type": h.contentType,
+							"size":         h.size,
+						})
 					}
+					detail["blobs_public"] = objs
+				}
+
+				if len(curls) > 0 {
+					detail["curl"] = curls
 				}
 
 				_ = sink.Write(ctx, findings.Finding{
@@ -114,7 +168,7 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 					Module:         "blob_anon",
 					Severity:       sev,
 					ResourceID:     ptrVal(c.ID),
-					Title:          fmt.Sprintf("Public blob access on %s/%s (%s)", acctName, containerName, access),
+					Title:          title,
 					Detail:         detail,
 				})
 			}
@@ -124,32 +178,143 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 	return nil
 }
 
-// probeAnonymousList performs an unauthenticated GET to the container's
-// list-blobs endpoint and returns true when the response is a 200 with XML.
-func probeAnonymousList(ctx context.Context, client *http.Client, account, container string) (bool, string) {
-	url := fmt.Sprintf("https://%s.blob.core.windows.net/%s?restype=container&comp=list", account, container)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+type anonListInfo struct {
+	listable   bool
+	curl       string
+	sampleKeys []string
+	totalSeen  int
+}
+
+func probeAnonList(ctx context.Context, account, container string) anonListInfo {
+	u := fmt.Sprintf("https://%s.blob.core.windows.net/%s?restype=container&comp=list&maxresults=%d",
+		account, container, maxBlobsPerContainer)
+	info := anonListInfo{curl: fmt.Sprintf("curl -s '%s'", u)}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return false, fmt.Sprintf("request error: %v", err)
+		return info
 	}
-	resp, err := client.Do(req)
+	resp, err := anonClient.Do(req)
 	if err != nil {
-		return false, fmt.Sprintf("probe error: %v", err)
+		return info
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Sprintf("HTTP %d", resp.StatusCode)
+		return info
 	}
 
-	// Read a small prefix to confirm XML.
-	buf := make([]byte, 512)
-	n, _ := io.ReadAtLeast(resp.Body, buf, 1)
-	body := string(buf[:n])
-	if strings.Contains(body, "<?xml") || strings.Contains(body, "<EnumerationResults") {
-		return true, "HTTP 200 (XML listing)"
+	var parsed struct {
+		XMLName xml.Name `xml:"EnumerationResults"`
+		Blobs   struct {
+			Blob []struct {
+				Name string `xml:"Name"`
+			} `xml:"Blob"`
+		} `xml:"Blobs"`
 	}
-	return false, fmt.Sprintf("HTTP 200 (non-XML body, %d bytes)", n)
+	if err := xml.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&parsed); err != nil {
+		return info
+	}
+	info.listable = true
+	info.totalSeen = len(parsed.Blobs.Blob)
+	for i, b := range parsed.Blobs.Blob {
+		if i >= maxBlobsPerContainer {
+			break
+		}
+		info.sampleKeys = append(info.sampleKeys, b.Name)
+	}
+	return info
+}
+
+type anonBlobHit struct {
+	key         string
+	url         string
+	status      int
+	contentType string
+	size        string
+	curl        string
+}
+
+func probeBlobs(ctx context.Context, account, container string, keys []string) []anonBlobHit {
+	if len(keys) == 0 {
+		return nil
+	}
+	results := make([]anonBlobHit, len(keys))
+	ok := make([]bool, len(keys))
+
+	type job struct {
+		idx int
+		key string
+	}
+	jobs := make(chan job)
+	var wg sync.WaitGroup
+
+	workers := probeWorkers
+	if workers > len(keys) {
+		workers = len(keys)
+	}
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				if h, found := probeOneBlob(ctx, account, container, j.key); found {
+					results[j.idx] = h
+					ok[j.idx] = true
+				}
+			}
+		}()
+	}
+	for i, k := range keys {
+		select {
+		case <-ctx.Done():
+			close(jobs)
+			wg.Wait()
+			return collectHits(results, ok)
+		case jobs <- job{idx: i, key: k}:
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	return collectHits(results, ok)
+}
+
+func collectHits(results []anonBlobHit, ok []bool) []anonBlobHit {
+	var hits []anonBlobHit
+	for i, h := range results {
+		if ok[i] {
+			hits = append(hits, h)
+		}
+	}
+	return hits
+}
+
+func probeOneBlob(ctx context.Context, account, container, key string) (anonBlobHit, bool) {
+	u := blobURL(account, container, key)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, u, nil)
+	if err != nil {
+		return anonBlobHit{}, false
+	}
+	resp, err := anonClient.Do(req)
+	if err != nil {
+		return anonBlobHit{}, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return anonBlobHit{}, false
+	}
+	return anonBlobHit{
+		key:         key,
+		url:         u,
+		status:      resp.StatusCode,
+		contentType: resp.Header.Get("Content-Type"),
+		size:        resp.Header.Get("Content-Length"),
+		curl:        fmt.Sprintf("curl -sI '%s'", u),
+	}, true
+}
+
+func blobURL(account, container, key string) string {
+	return fmt.Sprintf("https://%s.blob.core.windows.net/%s/%s",
+		account, container, url.PathEscape(key))
 }
 
 func resourceGroup(id string) string {
