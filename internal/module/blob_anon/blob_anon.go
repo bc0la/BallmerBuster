@@ -128,34 +128,45 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 				// 3. Probe each blob anonymously.
 				blobHits := probeBlobs(ctx, acctName, containerName, blobKeys)
 
-				if !listInfo.listable && len(blobHits) == 0 {
+				// Determine severity and title.
+				// ARM config is the primary signal; probes upgrade severity.
+				configPublic := access != "" && access != string(armstorage.PublicAccessNone)
+
+				if !configPublic && !listInfo.listable && len(blobHits) == 0 {
 					continue
 				}
 
-				sev := findings.SevHigh
-				if listInfo.listable {
-					sev = findings.SevCritical
-				}
-
+				var sev findings.Severity
 				var title string
+
 				switch {
 				case listInfo.listable && len(blobHits) > 0:
+					sev = findings.SevCritical
 					title = fmt.Sprintf("Storage %s/%s: anonymously listable + %d readable blob(s)",
 						acctName, containerName, len(blobHits))
 				case listInfo.listable:
+					sev = findings.SevCritical
 					title = fmt.Sprintf("Storage %s/%s: anonymously listable",
 						acctName, containerName)
-				default:
+				case len(blobHits) > 0:
+					sev = findings.SevHigh
 					title = fmt.Sprintf("Storage %s/%s: %d anonymously-readable blob(s)",
 						acctName, containerName, len(blobHits))
+				case configPublic:
+					// ARM says public access is enabled but probes didn't confirm.
+					// Still report — could be network/firewall blocking the scanner.
+					sev = findings.SevHigh
+					title = fmt.Sprintf("Storage %s/%s: public access enabled (level: %s)",
+						acctName, containerName, access)
 				}
 
 				detail := map[string]any{
 					"account_name":         acctName,
 					"container_name":       containerName,
-					"public_access":        string(access),
+					"public_access":        access,
 					"anonymously_listable": listInfo.listable,
 					"blobs_walked":         len(blobKeys),
+					"blobs_readable":       len(blobHits),
 				}
 
 				var curls []string
@@ -165,6 +176,13 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 					detail["list_sample_keys"] = listInfo.sampleKeys
 					detail["list_total_returned"] = listInfo.totalSeen
 					curls = append(curls, listInfo.curl)
+				} else if configPublic {
+					// Include the listing curl even if it failed — user can try
+					// from a different network.
+					listURL := fmt.Sprintf("https://%s.blob.core.windows.net/%s?restype=container&comp=list",
+						acctName, containerName)
+					detail["list_curl"] = fmt.Sprintf("curl -s '%s'", listURL)
+					curls = append(curls, fmt.Sprintf("curl -s '%s'", listURL))
 				}
 
 				if len(blobHits) > 0 {
