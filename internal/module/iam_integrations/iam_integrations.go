@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -71,12 +70,6 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 	log("info", "checking cross-tenant access policy partners")
 	if err := checkCrossTenantAccess(ctx, target, emit, log); err != nil {
 		log("warn", fmt.Sprintf("cross-tenant access: %v", err))
-	}
-
-	// 5. Apps with expiring or expired credentials (Graph API).
-	log("info", "checking application credential expiry")
-	if err := checkCredentialExpiry(ctx, target, emit, log); err != nil {
-		log("warn", fmt.Sprintf("credential expiry: %v", err))
 	}
 
 	log("info", "IAM integration checks complete")
@@ -605,113 +598,3 @@ func boolVal(b *bool) bool {
 	return *b
 }
 
-// ---------------------------------------------------------------------------
-// Check 5 — Apps with Key/Certificate Credentials Expiring or Expired
-// ---------------------------------------------------------------------------
-
-type credentialInfo struct {
-	KeyID       string `json:"keyId"`
-	DisplayName string `json:"displayName"`
-	StartDT     string `json:"startDateTime"`
-	EndDT       string `json:"endDateTime"`
-}
-
-type appWithCreds struct {
-	ID                  string           `json:"id"`
-	AppID               string           `json:"appId"`
-	DisplayName         string           `json:"displayName"`
-	KeyCredentials      []credentialInfo `json:"keyCredentials"`
-	PasswordCredentials []credentialInfo `json:"passwordCredentials"`
-}
-
-func checkCredentialExpiry(ctx context.Context, target creds.SubscriptionTarget,
-	emit func(findings.Finding), log func(string, string)) error {
-
-	const url = "https://graph.microsoft.com/v1.0/applications?$select=id,appId,displayName,keyCredentials,passwordCredentials"
-	raw, err := graphList(ctx, target.Credential, url)
-	if err != nil {
-		return err
-	}
-
-	log("info", fmt.Sprintf("checking credential expiry on %d app registrations", len(raw)))
-
-	now := time.Now().UTC()
-	thirtyDays := 30 * 24 * time.Hour
-
-	for _, r := range raw {
-		var app appWithCreds
-		if err := json.Unmarshal(r, &app); err != nil {
-			continue
-		}
-
-		// Check certificate credentials.
-		for _, kc := range app.KeyCredentials {
-			checkSingleCredential(now, thirtyDays, target, app, kc, "certificate", emit)
-		}
-
-		// Check password (client secret) credentials.
-		for _, pc := range app.PasswordCredentials {
-			checkSingleCredential(now, thirtyDays, target, app, pc, "client secret", emit)
-		}
-	}
-	return nil
-}
-
-func checkSingleCredential(now time.Time, warnWindow time.Duration,
-	target creds.SubscriptionTarget, app appWithCreds,
-	cred credentialInfo, credType string, emit func(findings.Finding)) {
-
-	endTime, err := time.Parse(time.RFC3339, cred.EndDT)
-	if err != nil {
-		// No expiry date — skip.
-		return
-	}
-
-	credLabel := cred.DisplayName
-	if credLabel == "" {
-		credLabel = cred.KeyID
-	}
-
-	if endTime.Before(now) {
-		// Expired but not removed.
-		emit(findings.Finding{
-			Region:     "global",
-			Severity:   findings.SevHigh,
-			ResourceID: fmt.Sprintf("/tenants/%s/applications/%s", target.TenantID, app.AppID),
-			Title: fmt.Sprintf("App %q has expired %s %q (expired %s)",
-				app.DisplayName, credType, credLabel, endTime.Format("2006-01-02")),
-			Detail: map[string]any{
-				"tenant_id":       target.TenantID,
-				"app_object_id":   app.ID,
-				"app_id":          app.AppID,
-				"display_name":    app.DisplayName,
-				"credential_type": credType,
-				"credential_id":   cred.KeyID,
-				"credential_name": cred.DisplayName,
-				"end_date":        cred.EndDT,
-				"status":          "expired",
-			},
-		})
-	} else if endTime.Before(now.Add(warnWindow)) {
-		// Expiring within 30 days.
-		emit(findings.Finding{
-			Region:     "global",
-			Severity:   findings.SevMedium,
-			ResourceID: fmt.Sprintf("/tenants/%s/applications/%s", target.TenantID, app.AppID),
-			Title: fmt.Sprintf("App %q has %s %q expiring soon (%s)",
-				app.DisplayName, credType, credLabel, endTime.Format("2006-01-02")),
-			Detail: map[string]any{
-				"tenant_id":       target.TenantID,
-				"app_object_id":   app.ID,
-				"app_id":          app.AppID,
-				"display_name":    app.DisplayName,
-				"credential_type": credType,
-				"credential_id":   cred.KeyID,
-				"credential_name": cred.DisplayName,
-				"end_date":        cred.EndDT,
-				"status":          "expiring_soon",
-				"days_remaining":  int(endTime.Sub(now).Hours() / 24),
-			},
-		})
-	}
-}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -47,19 +48,13 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 		log("warn", fmt.Sprintf("multi-tenant apps: %v", err))
 	}
 
-	// 2. Service principals with password credentials.
-	log("info", "checking service principal password credentials")
-	if err := checkSPPasswordCredentials(ctx, target, emit, log); err != nil {
-		log("warn", fmt.Sprintf("service principal passwords: %v", err))
-	}
-
-	// 3. Federated identity credentials.
+	// 2. Federated identity credentials (incl. GitHub takeover probes).
 	log("info", "checking federated identity credentials")
 	if err := checkFederatedIdentityCredentials(ctx, target, emit, log); err != nil {
 		log("warn", fmt.Sprintf("federated identity credentials: %v", err))
 	}
 
-	// 4. OAuth2 permission grants (admin consent).
+	// 3. OAuth2 permission grants (admin consent).
 	log("info", "checking OAuth2 admin-consented permission grants")
 	if err := checkOAuth2PermissionGrants(ctx, target, emit, log); err != nil {
 		log("warn", fmt.Sprintf("oauth2 permission grants: %v", err))
@@ -162,92 +157,7 @@ func checkMultiTenantApps(ctx context.Context, target creds.SubscriptionTarget, 
 }
 
 // ---------------------------------------------------------------------------
-// Check 2 — service principals with password credentials
-// ---------------------------------------------------------------------------
-
-type passwordCredential struct {
-	KeyID       string `json:"keyId"`
-	DisplayName string `json:"displayName"`
-	StartDT     string `json:"startDateTime"`
-	EndDT       string `json:"endDateTime"`
-}
-
-type servicePrincipal struct {
-	ID                  string               `json:"id"`
-	AppID               string               `json:"appId"`
-	DisplayName         string               `json:"displayName"`
-	PasswordCredentials []passwordCredential `json:"passwordCredentials"`
-}
-
-func checkSPPasswordCredentials(ctx context.Context, target creds.SubscriptionTarget, emit func(findings.Finding), log func(string, string)) error {
-	const url = "https://graph.microsoft.com/v1.0/servicePrincipals?$select=id,appId,displayName,passwordCredentials&$filter=servicePrincipalType eq 'Application'"
-	raw, err := graphList(ctx, target.Credential, url)
-	if err != nil {
-		return err
-	}
-
-	log("info", fmt.Sprintf("found %d application service principals", len(raw)))
-
-	now := time.Now().UTC()
-	twoYears := 2 * 365 * 24 * time.Hour
-
-	for _, r := range raw {
-		var sp servicePrincipal
-		if err := json.Unmarshal(r, &sp); err != nil {
-			continue
-		}
-		if len(sp.PasswordCredentials) == 0 {
-			continue
-		}
-
-		for _, pc := range sp.PasswordCredentials {
-			sev := findings.SevMedium
-			title := fmt.Sprintf("Service principal %q has password credential %q", sp.DisplayName, pc.DisplayName)
-
-			startTime, _ := time.Parse(time.RFC3339, pc.StartDT)
-			endTime, endErr := time.Parse(time.RFC3339, pc.EndDT)
-
-			longLived := false
-			expired := false
-
-			if endErr == nil {
-				if !startTime.IsZero() && endTime.Sub(startTime) > twoYears {
-					longLived = true
-					sev = findings.SevHigh
-					title = fmt.Sprintf("Service principal %q has long-lived (>2yr) password credential %q", sp.DisplayName, pc.DisplayName)
-				}
-				if endTime.Before(now) {
-					expired = true
-					sev = findings.SevHigh
-					title = fmt.Sprintf("Service principal %q has expired but unremoved password credential %q", sp.DisplayName, pc.DisplayName)
-				}
-			}
-
-			emit(findings.Finding{
-				Region:     "global",
-				Severity:   sev,
-				ResourceID: fmt.Sprintf("/tenants/%s/servicePrincipals/%s", target.TenantID, sp.ID),
-				Title:      title,
-				Detail: map[string]any{
-					"tenant_id":       target.TenantID,
-					"sp_id":           sp.ID,
-					"app_id":          sp.AppID,
-					"display_name":    sp.DisplayName,
-					"credential_id":   pc.KeyID,
-					"credential_name": pc.DisplayName,
-					"start_date":      pc.StartDT,
-					"end_date":        pc.EndDT,
-					"long_lived":      longLived,
-					"expired":         expired,
-				},
-			})
-		}
-	}
-	return nil
-}
-
-// ---------------------------------------------------------------------------
-// Check 3 — federated identity credentials
+// Check 2 — federated identity credentials
 // ---------------------------------------------------------------------------
 
 type federatedIdentityCredential struct {
@@ -269,6 +179,13 @@ func checkFederatedIdentityCredentials(ctx context.Context, target creds.Subscri
 
 	log("info", fmt.Sprintf("checking federated identity credentials on %d app registrations", len(raw)))
 
+	ghc := newGitHubCache()
+	if ghc.authenticated {
+		log("info", "using GITHUB_TOKEN for authenticated GitHub API probes (5000 req/hr)")
+	} else {
+		log("info", "no GITHUB_TOKEN set — GitHub probes are unauthenticated (60 req/hr; private repos may yield false positives)")
+	}
+
 	for _, r := range raw {
 		var app appRegistration
 		if err := json.Unmarshal(r, &app); err != nil {
@@ -288,7 +205,57 @@ func checkFederatedIdentityCredentials(ctx context.Context, target creds.Subscri
 				continue
 			}
 
-			sev, title := evaluateFederatedCredential(app, fic, target.TenantID)
+			sev, title := evaluateFederatedCredential(app, fic)
+			detail := map[string]any{
+				"tenant_id":    target.TenantID,
+				"app_id":       app.AppID,
+				"display_name": app.DisplayName,
+				"fic_id":       fic.ID,
+				"fic_name":     fic.Name,
+				"issuer":       fic.Issuer,
+				"subject":      fic.Subject,
+				"audiences":    fic.Audiences,
+				"description":  fic.Description,
+			}
+
+			// GitHub Actions OIDC takeover probe: if the subject names a
+			// specific owner/repo, check whether the owner and repo still
+			// exist. A missing owner means the username is claimable on
+			// github.com — anyone can register it, recreate the repo, and
+			// claim OIDC tokens for this app.
+			if strings.Contains(fic.Issuer, "token.actions.githubusercontent.com") {
+				owner, repo := parseGitHubSubjectRepo(fic.Subject)
+				if owner != "" && repo != "" {
+					ownerExists := ghc.ownerExists(ctx, owner)
+					repoExists := ownerExists && ghc.repoExists(ctx, owner, repo)
+					detail["github_owner"] = owner
+					detail["github_repo"] = repo
+					detail["github_owner_exists"] = ownerExists
+					detail["github_repo_exists"] = repoExists
+					detail["github_probe_authenticated"] = ghc.authenticated
+
+					switch {
+					case !ownerExists:
+						sev = findings.SevCritical
+						title = fmt.Sprintf("App %q GitHub OIDC owner %q is claimable — register username, recreate %s, mint tokens",
+							app.DisplayName, owner, repo)
+					case !repoExists:
+						// Owner exists but repo does not. If GITHUB_TOKEN is
+						// set we can be reasonably confident the repo was
+						// deleted; without it, a 404 may just mean private.
+						if ghc.authenticated {
+							sev = findings.SevHigh
+							title = fmt.Sprintf("App %q GitHub OIDC repo %s/%s is missing — recreate in that org to claim tokens",
+								app.DisplayName, owner, repo)
+						} else if sev == "" {
+							sev = findings.SevMedium
+							title = fmt.Sprintf("App %q GitHub OIDC repo %s/%s 404s unauthenticated (deleted or private — verify with GITHUB_TOKEN)",
+								app.DisplayName, owner, repo)
+						}
+					}
+				}
+			}
+
 			if sev == "" {
 				continue
 			}
@@ -298,24 +265,14 @@ func checkFederatedIdentityCredentials(ctx context.Context, target creds.Subscri
 				Severity:   sev,
 				ResourceID: fmt.Sprintf("/tenants/%s/applications/%s/federatedIdentityCredentials/%s", target.TenantID, app.AppID, fic.ID),
 				Title:      title,
-				Detail: map[string]any{
-					"tenant_id":    target.TenantID,
-					"app_id":       app.AppID,
-					"display_name": app.DisplayName,
-					"fic_id":       fic.ID,
-					"fic_name":     fic.Name,
-					"issuer":       fic.Issuer,
-					"subject":      fic.Subject,
-					"audiences":    fic.Audiences,
-					"description":  fic.Description,
-				},
+				Detail:     detail,
 			})
 		}
 	}
 	return nil
 }
 
-func evaluateFederatedCredential(app appRegistration, fic federatedIdentityCredential, tenantID string) (findings.Severity, string) {
+func evaluateFederatedCredential(app appRegistration, fic federatedIdentityCredential) (findings.Severity, string) {
 	subject := fic.Subject
 	issuer := fic.Issuer
 
@@ -347,6 +304,93 @@ func evaluateFederatedCredential(app appRegistration, fic federatedIdentityCrede
 	}
 
 	return "", ""
+}
+
+// parseGitHubSubjectRepo extracts the "Owner/Repo" pair from a GitHub Actions
+// OIDC subject like "repo:Owner/Repo:ref:refs/heads/main". Returns empty
+// strings if the subject does not start with "repo:" or is malformed.
+func parseGitHubSubjectRepo(subject string) (owner, repo string) {
+	if !strings.HasPrefix(subject, "repo:") {
+		return "", ""
+	}
+	rest := strings.TrimPrefix(subject, "repo:")
+	end := strings.Index(rest, ":")
+	if end == -1 {
+		end = len(rest)
+	}
+	ownerRepo := rest[:end]
+	slash := strings.Index(ownerRepo, "/")
+	if slash <= 0 || slash == len(ownerRepo)-1 {
+		return "", ""
+	}
+	owner = ownerRepo[:slash]
+	repo = ownerRepo[slash+1:]
+	if strings.ContainsAny(owner, "*") || strings.ContainsAny(repo, "*") {
+		return "", ""
+	}
+	return owner, repo
+}
+
+// gitHubCache memoizes GitHub API probes for repo/owner existence.
+type gitHubCache struct {
+	repos         map[string]bool
+	owners        map[string]bool
+	client        *http.Client
+	token         string
+	authenticated bool
+}
+
+func newGitHubCache() *gitHubCache {
+	token := os.Getenv("GITHUB_TOKEN")
+	return &gitHubCache{
+		repos:         map[string]bool{},
+		owners:        map[string]bool{},
+		client:        &http.Client{Timeout: 10 * time.Second},
+		token:         token,
+		authenticated: token != "",
+	}
+}
+
+func (c *gitHubCache) statusFor(ctx context.Context, url string) int {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return -1
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return -1
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode
+}
+
+func (c *gitHubCache) ownerExists(ctx context.Context, owner string) bool {
+	if v, ok := c.owners[owner]; ok {
+		return v
+	}
+	exists := false
+	if c.statusFor(ctx, "https://api.github.com/users/"+owner) == 200 {
+		exists = true
+	} else if c.statusFor(ctx, "https://api.github.com/orgs/"+owner) == 200 {
+		exists = true
+	}
+	c.owners[owner] = exists
+	return exists
+}
+
+func (c *gitHubCache) repoExists(ctx context.Context, owner, repo string) bool {
+	key := owner + "/" + repo
+	if v, ok := c.repos[key]; ok {
+		return v
+	}
+	exists := c.statusFor(ctx, "https://api.github.com/repos/"+key) == 200
+	c.repos[key] = exists
+	return exists
 }
 
 // ---------------------------------------------------------------------------
