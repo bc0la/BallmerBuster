@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -67,15 +68,23 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 		return fmt.Errorf("logic_apps: list workflows: %w", err)
 	}
 
-	log("info", fmt.Sprintf("found %d Logic App workflows, scanning with %d workers", len(workflows), workflowWorkers))
+	total := int32(len(workflows))
+	log("info", fmt.Sprintf("found %d Logic App workflows, scanning with %d workers", total, workflowWorkers))
 
-	var wfWg sync.WaitGroup
+	var (
+		completed atomic.Int32
+		wfWg      sync.WaitGroup
+	)
 	wfSem := make(chan struct{}, workflowWorkers)
 	for _, wf := range workflows {
 		wf := wf
 		wfWg.Add(1)
 		go func() {
 			defer wfWg.Done()
+			defer func() {
+				done := completed.Add(1)
+				log("info", fmt.Sprintf("workflows: %d/%d complete (last: %s)", done, total, wf.Name))
+			}()
 			select {
 			case wfSem <- struct{}{}:
 			case <-ctx.Done():
@@ -87,7 +96,7 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 	}
 	wfWg.Wait()
 
-	log("info", "Logic Apps scan complete")
+	log("info", fmt.Sprintf("Logic Apps scan complete (%d/%d workflows)", completed.Load(), total))
 	return nil
 }
 
