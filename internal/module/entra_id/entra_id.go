@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
-	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -181,13 +179,6 @@ func checkFederatedIdentityCredentials(ctx context.Context, target creds.Subscri
 
 	log("info", fmt.Sprintf("checking federated identity credentials on %d app registrations", len(raw)))
 
-	ghc := newGitHubCache()
-	if ghc.authenticated {
-		log("info", "using GITHUB_TOKEN for authenticated GitHub API probes (5000 req/hr)")
-	} else {
-		log("info", "no GITHUB_TOKEN set — GitHub probes are unauthenticated (60 req/hr; private repos may yield false positives)")
-	}
-
 	for _, r := range raw {
 		var app appRegistration
 		if err := json.Unmarshal(r, &app); err != nil {
@@ -208,6 +199,10 @@ func checkFederatedIdentityCredentials(ctx context.Context, target creds.Subscri
 			}
 
 			assess := evaluateFederatedCredential(app, fic)
+			if assess.Severity == "" {
+				continue
+			}
+
 			detail := map[string]any{
 				"tenant_id":    target.TenantID,
 				"app_id":       app.AppID,
@@ -218,55 +213,8 @@ func checkFederatedIdentityCredentials(ctx context.Context, target creds.Subscri
 				"subject":      fic.Subject,
 				"audiences":    fic.Audiences,
 				"description":  fic.Description,
-			}
-			if assess.Category != "" {
-				detail["category"] = assess.Category
-				detail["reason"] = assess.Reason
-			}
-
-			// GitHub Actions OIDC takeover probe: if the subject names a
-			// specific owner/repo, check whether the owner and repo still
-			// exist. A missing owner means the username is claimable on
-			// github.com — anyone can register it, recreate the repo, and
-			// claim OIDC tokens for this app.
-			if strings.Contains(fic.Issuer, githubOIDCIssuer) {
-				owner, repo := parseGitHubSubjectRepo(fic.Subject)
-				if owner != "" && repo != "" {
-					ownerExists := ghc.ownerExists(ctx, owner)
-					repoExists := ownerExists && ghc.repoExists(ctx, owner, repo)
-					detail["github_owner"] = owner
-					detail["github_repo"] = repo
-					detail["github_owner_exists"] = ownerExists
-					detail["github_repo_exists"] = repoExists
-					detail["github_probe_authenticated"] = ghc.authenticated
-
-					switch {
-					case !ownerExists:
-						assess.Severity = findings.SevCritical
-						assess.Title = fmt.Sprintf("App %q GitHub OIDC owner %q is claimable — register username, recreate %s, mint tokens",
-							app.DisplayName, owner, repo)
-						assess.Category = "github_oidc_owner_claimable"
-					case !repoExists:
-						if ghc.authenticated {
-							assess.Severity = findings.SevHigh
-							assess.Title = fmt.Sprintf("App %q GitHub OIDC repo %s/%s is missing — recreate in that org to claim tokens",
-								app.DisplayName, owner, repo)
-							assess.Category = "github_oidc_repo_missing"
-						} else if assess.Severity == "" {
-							assess.Severity = findings.SevMedium
-							assess.Title = fmt.Sprintf("App %q GitHub OIDC repo %s/%s 404s unauthenticated (deleted or private — verify with GITHUB_TOKEN)",
-								app.DisplayName, owner, repo)
-							assess.Category = "github_oidc_repo_404_unauth"
-						}
-					}
-				}
-			}
-
-			if assess.Severity == "" {
-				continue
-			}
-			if assess.Category != "" {
-				detail["category"] = assess.Category
+				"category":     assess.Category,
+				"reason":       assess.Reason,
 			}
 
 			emit(findings.Finding{
@@ -292,29 +240,53 @@ type federatedAssessment struct {
 }
 
 func evaluateFederatedCredential(app appRegistration, fic federatedIdentityCredential) federatedAssessment {
-	isGitHub := strings.Contains(fic.Issuer, githubOIDCIssuer)
-	if isGitHub {
+	switch {
+	case strings.Contains(fic.Issuer, githubOIDCIssuer):
 		risk := analyzeGitHubSub(fic.Subject)
 		if risk.Severity == "" {
 			return federatedAssessment{}
 		}
 		return federatedAssessment{
 			Severity: risk.Severity,
-			Title: fmt.Sprintf("App %q has GitHub OIDC credential %q with %s — %s",
+			Title: fmt.Sprintf("App %q has GitHub OIDC credential %q (%s) — %s",
+				app.DisplayName, fic.Name, risk.Category, risk.Reason),
+			Category: risk.Category,
+			Reason:   risk.Reason,
+		}
+	case looksLikeK8sIssuer(fic.Issuer):
+		risk := analyzeK8sSub(fic.Subject)
+		if risk.Severity == "" {
+			return federatedAssessment{}
+		}
+		return federatedAssessment{
+			Severity: risk.Severity,
+			Title: fmt.Sprintf("App %q has Kubernetes OIDC credential %q (%s) — %s",
+				app.DisplayName, fic.Name, risk.Category, risk.Reason),
+			Category: risk.Category,
+			Reason:   risk.Reason,
+		}
+	case looksLikeGitLabIssuer(fic.Issuer):
+		risk := analyzeGitLabSub(fic.Subject)
+		if risk.Severity == "" {
+			return federatedAssessment{}
+		}
+		return federatedAssessment{
+			Severity: risk.Severity,
+			Title: fmt.Sprintf("App %q has GitLab CI OIDC credential %q (%s) — %s",
 				app.DisplayName, fic.Name, risk.Category, risk.Reason),
 			Category: risk.Category,
 			Reason:   risk.Reason,
 		}
 	}
 
-	// Non-GitHub issuer — generic wildcard / empty checks. Azure FIC v1.0
-	// requires exact subject match, so wildcards are misconfigurations
+	// Non-recognized issuer — generic wildcard / empty checks. Azure FIC
+	// v1.0 requires exact subject match, so wildcards are misconfigurations
 	// unless paired with claimsMatchingExpression.
 	subject := strings.TrimSpace(fic.Subject)
 	if subject == "" {
 		return federatedAssessment{
 			Severity: findings.SevHigh,
-			Title:    fmt.Sprintf("App %q has federated credential %q with empty subject", app.DisplayName, fic.Name),
+			Title:    fmt.Sprintf("App %q has federated credential %q with empty subject (issuer %s)", app.DisplayName, fic.Name, fic.Issuer),
 			Category: "fed_empty_sub",
 			Reason:   "empty subject — FIC will not authenticate any token without claimsMatchingExpression",
 		}
@@ -322,104 +294,27 @@ func evaluateFederatedCredential(app appRegistration, fic federatedIdentityCrede
 	if strings.Contains(subject, "*") {
 		return federatedAssessment{
 			Severity: findings.SevMedium,
-			Title: fmt.Sprintf("App %q has federated credential %q with wildcard in subject (%s)",
-				app.DisplayName, fic.Name, subject),
+			Title: fmt.Sprintf("App %q has federated credential %q with wildcard in subject (%s, issuer %s)",
+				app.DisplayName, fic.Name, subject, fic.Issuer),
 			Category: "fed_wildcard_sub",
 			Reason:   "subject contains a wildcard; Azure FIC v1.0 requires exact match unless claimsMatchingExpression is set",
+		}
+	}
+	// Unknown issuer (not a recognized provider) — flag for manual review.
+	if !knownOIDCIssuer(fic.Issuer) {
+		return federatedAssessment{
+			Severity: findings.SevLow,
+			Title: fmt.Sprintf("App %q has federated credential %q with unrecognized issuer %s",
+				app.DisplayName, fic.Name, fic.Issuer),
+			Category: "fed_unknown_issuer",
+			Reason:   "issuer is not a known provider (GitHub, GitLab, K8s, Terraform Cloud, etc.) — verify the OIDC provider is trustworthy and the subject is appropriately scoped",
 		}
 	}
 	return federatedAssessment{}
 }
 
-// parseGitHubSubjectRepo extracts the "Owner/Repo" pair from a GitHub Actions
-// OIDC subject like "repo:Owner/Repo:ref:refs/heads/main". Returns empty
-// strings if the subject does not start with "repo:" or is malformed.
-func parseGitHubSubjectRepo(subject string) (owner, repo string) {
-	if !strings.HasPrefix(subject, "repo:") {
-		return "", ""
-	}
-	rest := strings.TrimPrefix(subject, "repo:")
-	end := strings.Index(rest, ":")
-	if end == -1 {
-		end = len(rest)
-	}
-	ownerRepo := rest[:end]
-	slash := strings.Index(ownerRepo, "/")
-	if slash <= 0 || slash == len(ownerRepo)-1 {
-		return "", ""
-	}
-	owner = ownerRepo[:slash]
-	repo = ownerRepo[slash+1:]
-	if strings.ContainsAny(owner, "*") || strings.ContainsAny(repo, "*") {
-		return "", ""
-	}
-	return owner, repo
-}
-
-// gitHubCache memoizes GitHub API probes for repo/owner existence.
-type gitHubCache struct {
-	repos         map[string]bool
-	owners        map[string]bool
-	client        *http.Client
-	token         string
-	authenticated bool
-}
-
-func newGitHubCache() *gitHubCache {
-	token := os.Getenv("GITHUB_TOKEN")
-	return &gitHubCache{
-		repos:         map[string]bool{},
-		owners:        map[string]bool{},
-		client:        &http.Client{Timeout: 10 * time.Second},
-		token:         token,
-		authenticated: token != "",
-	}
-}
-
-func (c *gitHubCache) statusFor(ctx context.Context, url string) int {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return -1
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return -1
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	return resp.StatusCode
-}
-
-func (c *gitHubCache) ownerExists(ctx context.Context, owner string) bool {
-	if v, ok := c.owners[owner]; ok {
-		return v
-	}
-	exists := false
-	if c.statusFor(ctx, "https://api.github.com/users/"+owner) == 200 {
-		exists = true
-	} else if c.statusFor(ctx, "https://api.github.com/orgs/"+owner) == 200 {
-		exists = true
-	}
-	c.owners[owner] = exists
-	return exists
-}
-
-func (c *gitHubCache) repoExists(ctx context.Context, owner, repo string) bool {
-	key := owner + "/" + repo
-	if v, ok := c.repos[key]; ok {
-		return v
-	}
-	exists := c.statusFor(ctx, "https://api.github.com/repos/"+key) == 200
-	c.repos[key] = exists
-	return exists
-}
-
 // ---------------------------------------------------------------------------
-// Check 4 — OAuth2 permission grants (admin consent)
+// Check 3 — OAuth2 permission grants (admin consent)
 // ---------------------------------------------------------------------------
 
 type oauth2PermissionGrant struct {
