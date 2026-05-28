@@ -85,7 +85,8 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 			continue
 		}
 
-		log("info", fmt.Sprintf("  %d recent runs", len(runs)))
+		log("info", fmt.Sprintf("  %d runs sampled (newest %d + oldest %d, capped at %d pages of pagination)",
+			len(runs), runsNewest, runsOldest, runsMaxPagesScanned))
 
 		// 3. For each run, get actions and scan inputs/outputs.
 		for _, run := range runs {
@@ -220,25 +221,96 @@ func listWorkflows(ctx context.Context, cred azcore.TokenCredential, subID strin
 	return workflows, nil
 }
 
+// Bounds for run sampling. Logic App workflows can have thousands of run
+// records and each run triggers per-action input+output blob fetches —
+// scanning all of them dominates engagement time. We sample the newest
+// runsNewest runs plus the oldest runsOldest runs (chronologically the
+// "first" and "last" runs), capping pagination so workflows with millions
+// of runs don't stall a scan.
+const (
+	runsNewest          = 20
+	runsOldest          = 20
+	runsMaxPagesScanned = 50 // safety cap on how far we walk for oldest
+)
+
+type runPage struct {
+	Value    []json.RawMessage `json:"value"`
+	NextLink string            `json:"nextLink"`
+}
+
+func parseRun(r json.RawMessage) (run, bool) {
+	var entry struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(r, &entry); err != nil {
+		return run{}, false
+	}
+	return run{ID: entry.ID, Name: entry.Name}, true
+}
+
 func listRuns(ctx context.Context, cred azcore.TokenCredential, workflowID string) ([]run, error) {
-	url := fmt.Sprintf("https://management.azure.com%s/runs?api-version=2019-05-01&$top=5", workflowID)
-	raw, err := armList(ctx, cred, url)
-	if err != nil {
+	// Azure's runs endpoint returns descending startTime order.
+	// Newest first batch is one page of $top=runsNewest.
+	newestURL := fmt.Sprintf("https://management.azure.com%s/runs?api-version=2019-05-01&$top=%d",
+		workflowID, runsNewest)
+	var first runPage
+	if err := armGet(ctx, cred, newestURL, &first); err != nil {
 		return nil, err
 	}
 
-	var runs []run
-	for _, r := range raw {
-		var entry struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
+	var newest []run
+	for _, r := range first.Value {
+		if rr, ok := parseRun(r); ok {
+			newest = append(newest, rr)
 		}
-		if err := json.Unmarshal(r, &entry); err != nil {
-			continue
-		}
-		runs = append(runs, run{ID: entry.ID, Name: entry.Name})
 	}
-	return runs, nil
+
+	// Walk subsequent pages keeping a sliding window of the last
+	// runsOldest entries seen. When pagination ends, the window holds
+	// the oldest runs. Bounded by runsMaxPagesScanned so abusive
+	// histories don't dominate the scan.
+	window := make([]run, 0, runsOldest)
+	nextURL := first.NextLink
+	pages := 0
+	for nextURL != "" && pages < runsMaxPagesScanned {
+		var pg runPage
+		if err := armGet(ctx, cred, nextURL, &pg); err != nil {
+			break
+		}
+		for _, r := range pg.Value {
+			rr, ok := parseRun(r)
+			if !ok {
+				continue
+			}
+			if len(window) < runsOldest {
+				window = append(window, rr)
+			} else {
+				copy(window, window[1:])
+				window[runsOldest-1] = rr
+			}
+		}
+		nextURL = pg.NextLink
+		pages++
+	}
+
+	// Combine newest + window, deduplicating IDs (for workflows with
+	// < runsNewest+runsOldest total runs they overlap).
+	seen := make(map[string]bool, len(newest)+len(window))
+	combined := make([]run, 0, len(newest)+len(window))
+	for _, r := range newest {
+		if !seen[r.ID] {
+			seen[r.ID] = true
+			combined = append(combined, r)
+		}
+	}
+	for _, r := range window {
+		if !seen[r.ID] {
+			seen[r.ID] = true
+			combined = append(combined, r)
+		}
+	}
+	return combined, nil
 }
 
 func listRunActions(ctx context.Context, cred azcore.TokenCredential, runID string) ([]action, error) {
