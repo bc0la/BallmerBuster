@@ -67,59 +67,78 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 		return fmt.Errorf("logic_apps: list workflows: %w", err)
 	}
 
-	log("info", fmt.Sprintf("found %d Logic App workflows", len(workflows)))
+	log("info", fmt.Sprintf("found %d Logic App workflows, scanning with %d workers", len(workflows), workflowWorkers))
 
-	for i, wf := range workflows {
-		wfName := wf.Name
-		wfID := wf.ID
-		wfLocation := wf.Location
-
-		log("info", fmt.Sprintf("workflow %d/%d: %s", i+1, len(workflows), wfName))
-
-		// Check workflow triggers for open HTTP triggers.
-		checkTriggers(ctx, target.Credential, wfID, wfName, wfLocation, emit, log)
-
-		// 2. Get recent run history (last 5 runs).
-		runs, err := listRuns(ctx, target.Credential, wfID)
-		if err != nil {
-			log("warn", fmt.Sprintf("list runs for %s: %v", wfName, err))
-			continue
-		}
-
-		log("info", fmt.Sprintf("  %d runs sampled (newest %d + oldest %d), scanning with %d workers",
-			len(runs), runsNewest, runsOldest, runScanWorkers))
-
-		// 3. Per-run action+content scanning, parallelized.
-		var wg sync.WaitGroup
-		sem := make(chan struct{}, runScanWorkers)
-		for _, r := range runs {
-			r := r
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				select {
-				case sem <- struct{}{}:
-				case <-ctx.Done():
-					return
-				}
-				defer func() { <-sem }()
-
-				actions, err := listRunActions(ctx, target.Credential, r.ID)
-				if err != nil {
-					log("warn", fmt.Sprintf("list actions for run %s: %v", r.Name, err))
-					return
-				}
-				for _, action := range actions {
-					scanActionLink(ctx, action.InputsLinkURI, "inputs", wfName, wfLocation, wfID, action.Name, emit)
-					scanActionLink(ctx, action.OutputsLinkURI, "outputs", wfName, wfLocation, wfID, action.Name, emit)
-				}
-			}()
-		}
-		wg.Wait()
+	var wfWg sync.WaitGroup
+	wfSem := make(chan struct{}, workflowWorkers)
+	for _, wf := range workflows {
+		wf := wf
+		wfWg.Add(1)
+		go func() {
+			defer wfWg.Done()
+			select {
+			case wfSem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-wfSem }()
+			scanWorkflow(ctx, target, wf, log, emit)
+		}()
 	}
+	wfWg.Wait()
 
 	log("info", "Logic Apps scan complete")
 	return nil
+}
+
+// scanWorkflow checks triggers, samples runs, and parallelizes the per-run
+// action+content fetches for a single workflow.
+func scanWorkflow(ctx context.Context, target creds.SubscriptionTarget, wf workflow,
+	log func(string, string), emit func(findings.Finding)) {
+
+	wfName := wf.Name
+	wfID := wf.ID
+	wfLocation := wf.Location
+
+	log("info", fmt.Sprintf("workflow: %s", wfName))
+
+	checkTriggers(ctx, target.Credential, wfID, wfName, wfLocation, emit, log)
+
+	runs, err := listRuns(ctx, target.Credential, wfID)
+	if err != nil {
+		log("warn", fmt.Sprintf("list runs for %s: %v", wfName, err))
+		return
+	}
+
+	log("info", fmt.Sprintf("  %s: %d runs sampled (newest %d + oldest %d), scanning with %d workers",
+		wfName, len(runs), runsNewest, runsOldest, runScanWorkers))
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, runScanWorkers)
+	for _, r := range runs {
+		r := r
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
+			defer func() { <-sem }()
+
+			actions, err := listRunActions(ctx, target.Credential, r.ID)
+			if err != nil {
+				log("warn", fmt.Sprintf("list actions for run %s: %v", r.Name, err))
+				return
+			}
+			for _, action := range actions {
+				scanActionLink(ctx, action.InputsLinkURI, "inputs", wfName, wfLocation, wfID, action.Name, emit)
+				scanActionLink(ctx, action.OutputsLinkURI, "outputs", wfName, wfLocation, wfID, action.Name, emit)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +266,7 @@ const (
 	runsOldest          = 5
 	runsMaxPagesScanned = 50 // safety cap on how far we walk for oldest
 	runScanWorkers      = 5
+	workflowWorkers     = 5 // concurrent workflows scanned per subscription
 )
 
 type runPage struct {
