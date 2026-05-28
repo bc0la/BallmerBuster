@@ -65,8 +65,8 @@ func Detect(ctx context.Context, opts Options) ([]SubscriptionTarget, error) {
 		return enumerateManagementGroup(ctx, cred, opts.ManagementGroup)
 	}
 
-	// Default: enumerate all accessible subscriptions if --all-subs,
-	// otherwise pick the first one.
+	// Default: enumerate all accessible subscriptions. --all-subs is kept
+	// for backwards compatibility (it's now the default behavior).
 	subs, err := listSubscriptions(ctx, cred)
 	if err != nil {
 		return nil, fmt.Errorf("%w\n\nhint: authenticate with one of:\n  az login                                          (interactive)\n  export AZURE_TENANT_ID=... AZURE_CLIENT_ID=... AZURE_CLIENT_SECRET=...  (service principal)", err)
@@ -74,10 +74,7 @@ func Detect(ctx context.Context, opts Options) ([]SubscriptionTarget, error) {
 	if len(subs) == 0 {
 		return nil, fmt.Errorf("no accessible subscriptions found")
 	}
-	if opts.AllSubs {
-		return subs, nil
-	}
-	return subs[:1], nil
+	return subs, nil
 }
 
 func resolveSubscription(ctx context.Context, cred azcore.TokenCredential, subID string) (SubscriptionTarget, error) {

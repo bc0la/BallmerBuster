@@ -93,6 +93,8 @@ func graphGet(ctx context.Context, cred azcore.TokenCredential, url string, resu
 	}
 	req.Header.Set("Authorization", "Bearer "+token.Token)
 	req.Header.Set("Content-Type", "application/json")
+	// Required for $filter on advanced properties (servicePrincipalType, etc.).
+	req.Header.Set("ConsistencyLevel", "eventual")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err
