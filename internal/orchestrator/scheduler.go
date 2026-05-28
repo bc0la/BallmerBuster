@@ -119,6 +119,7 @@ func (s *Scheduler) Run(ctx context.Context, targets []creds.SubscriptionTarget)
 					if creds.IsExpired(err) && s.watcher != nil {
 						s.watcher.Trip()
 					}
+					_ = s.eng.LogEvent(ctx, m.Name(), t.SubscriptionID, "error", err.Error())
 					s.emit(ctx, t.SubscriptionID, m.Name(), "failed", err.Error())
 					return
 				}

@@ -75,6 +75,8 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 		}
 		vault := resp.Vault
 		if vault.Properties == nil {
+			_ = sink.LogEvent(ctx, "keyvault_exposure", target.SubscriptionID, "warn",
+				fmt.Sprintf("vault %s: properties nil", ref.Name))
 			continue
 		}
 		props := vault.Properties
@@ -83,6 +85,18 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 		exposure := checkNetworkExposure(props)
 		publicNetwork := exposure.public
 		permissiveCount := countOverlyPermissivePolicies(props)
+
+		_ = sink.LogEvent(ctx, "keyvault_exposure", target.SubscriptionID, "info",
+			fmt.Sprintf("vault %s state: publicNetworkAccess=%s defaultAction=%s bypass=%s public=%t bypassAzure=%t permissivePolicies=%d softDelete=%s purgeProtection=%s rbac=%s",
+				ref.Name,
+				strPtr(props.PublicNetworkAccess),
+				networkActionStr(props.NetworkACLs),
+				networkBypassStr(props.NetworkACLs),
+				publicNetwork, exposure.bypassAzure, permissiveCount,
+				boolPtr(props.EnableSoftDelete),
+				boolPtr(props.EnablePurgeProtection),
+				boolPtr(props.EnableRbacAuthorization),
+			))
 
 		if exposure.bypassAzure && !publicNetwork {
 			_ = sink.Write(ctx, findings.Finding{
@@ -151,7 +165,9 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 		}
 
 		// --- Soft-delete check ---
-		softDeleteEnabled := props.EnableSoftDelete != nil && *props.EnableSoftDelete
+		// Soft-delete is mandatory in Azure since 2020; the API may omit the
+		// field (nil) when enabled. Only fire when explicitly false.
+		softDeleteEnabled := props.EnableSoftDelete == nil || *props.EnableSoftDelete
 		if !softDeleteEnabled {
 			_ = sink.Write(ctx, findings.Finding{
 				SubscriptionID: target.SubscriptionID,
@@ -282,4 +298,38 @@ func ptrVal[T any](p *T) T {
 		return zero
 	}
 	return *p
+}
+
+func strPtr(p *string) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return *p
+}
+
+func boolPtr(p *bool) string {
+	if p == nil {
+		return "<nil>"
+	}
+	if *p {
+		return "true"
+	}
+	return "false"
+}
+
+func networkActionStr(acls *armkeyvault.NetworkRuleSet) string {
+	if acls == nil {
+		return "<nil-acls>"
+	}
+	if acls.DefaultAction == nil {
+		return "<nil>"
+	}
+	return string(*acls.DefaultAction)
+}
+
+func networkBypassStr(acls *armkeyvault.NetworkRuleSet) string {
+	if acls == nil || acls.Bypass == nil {
+		return "<nil>"
+	}
+	return string(*acls.Bypass)
 }

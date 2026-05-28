@@ -63,12 +63,15 @@ CREATE TABLE IF NOT EXISTS logs (
 `
 
 const DBFileName = "engagement.db"
+const LogFileName = "ballmerbuster.log"
 
 type Engagement struct {
-	db  *sql.DB
-	mu  sync.Mutex
-	Dir string
-	OnLog func(module, subscriptionID, level, msg string)
+	db      *sql.DB
+	mu      sync.Mutex
+	Dir     string
+	logFile *os.File
+	logMu   sync.Mutex
+	OnLog   func(module, subscriptionID, level, msg string)
 }
 
 func Open(dir string) (*Engagement, error) {
@@ -85,10 +88,23 @@ func Open(dir string) (*Engagement, error) {
 		db.Close()
 		return nil, fmt.Errorf("schema: %w", err)
 	}
-	return &Engagement{db: db, Dir: dir}, nil
+	logPath := filepath.Join(dir, LogFileName)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open log file: %w", err)
+	}
+	return &Engagement{db: db, Dir: dir, logFile: logFile}, nil
 }
 
-func (e *Engagement) Close() error { return e.db.Close() }
+func (e *Engagement) Close() error {
+	if e.logFile != nil {
+		_ = e.logFile.Close()
+	}
+	return e.db.Close()
+}
+
+func (e *Engagement) LogPath() string { return filepath.Join(e.Dir, LogFileName) }
 
 func (e *Engagement) DB() *sql.DB { return e.db }
 
@@ -205,8 +221,15 @@ func (e *Engagement) LogEvent(ctx context.Context, module, subscriptionID, level
 	if e.OnLog != nil {
 		e.OnLog(module, subscriptionID, level, msg)
 	}
+	now := time.Now().UTC()
+	if e.logFile != nil {
+		e.logMu.Lock()
+		fmt.Fprintf(e.logFile, "%s [%s] %s sub=%s %s\n",
+			now.Format(time.RFC3339), level, module, subscriptionID, msg)
+		e.logMu.Unlock()
+	}
 	_, err := e.db.ExecContext(ctx,
 		`INSERT INTO logs(subscription_id, module, level, msg, created_at) VALUES(?,?,?,?,?)`,
-		nullIfEmpty(subscriptionID), nullIfEmpty(module), level, msg, time.Now().UTC())
+		nullIfEmpty(subscriptionID), nullIfEmpty(module), level, msg, now)
 	return err
 }
