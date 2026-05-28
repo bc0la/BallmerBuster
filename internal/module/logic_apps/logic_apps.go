@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -85,23 +86,36 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 			continue
 		}
 
-		log("info", fmt.Sprintf("  %d runs sampled (newest %d + oldest %d, capped at %d pages of pagination)",
-			len(runs), runsNewest, runsOldest, runsMaxPagesScanned))
+		log("info", fmt.Sprintf("  %d runs sampled (newest %d + oldest %d), scanning with %d workers",
+			len(runs), runsNewest, runsOldest, runScanWorkers))
 
-		// 3. For each run, get actions and scan inputs/outputs.
-		for _, run := range runs {
-			actions, err := listRunActions(ctx, target.Credential, run.ID)
-			if err != nil {
-				log("warn", fmt.Sprintf("list actions for run %s: %v", run.Name, err))
-				continue
-			}
+		// 3. Per-run action+content scanning, parallelized.
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, runScanWorkers)
+		for _, r := range runs {
+			r := r
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+				defer func() { <-sem }()
 
-			for _, action := range actions {
-				// 4. Fetch and scan input/output content for secrets.
-				scanActionLink(ctx, action.InputsLinkURI, "inputs", wfName, wfLocation, wfID, action.Name, emit)
-				scanActionLink(ctx, action.OutputsLinkURI, "outputs", wfName, wfLocation, wfID, action.Name, emit)
-			}
+				actions, err := listRunActions(ctx, target.Credential, r.ID)
+				if err != nil {
+					log("warn", fmt.Sprintf("list actions for run %s: %v", r.Name, err))
+					return
+				}
+				for _, action := range actions {
+					scanActionLink(ctx, action.InputsLinkURI, "inputs", wfName, wfLocation, wfID, action.Name, emit)
+					scanActionLink(ctx, action.OutputsLinkURI, "outputs", wfName, wfLocation, wfID, action.Name, emit)
+				}
+			}()
 		}
+		wg.Wait()
 	}
 
 	log("info", "Logic Apps scan complete")
@@ -226,11 +240,13 @@ func listWorkflows(ctx context.Context, cred azcore.TokenCredential, subID strin
 // scanning all of them dominates engagement time. We sample the newest
 // runsNewest runs plus the oldest runsOldest runs (chronologically the
 // "first" and "last" runs), capping pagination so workflows with millions
-// of runs don't stall a scan.
+// of runs don't stall a scan. Per-run action+content fetches run in
+// parallel across runScanWorkers goroutines.
 const (
-	runsNewest          = 20
-	runsOldest          = 20
+	runsNewest          = 5
+	runsOldest          = 5
 	runsMaxPagesScanned = 50 // safety cap on how far we walk for oldest
+	runScanWorkers      = 5
 )
 
 type runPage struct {
