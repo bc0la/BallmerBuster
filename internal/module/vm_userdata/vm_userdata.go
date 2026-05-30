@@ -178,6 +178,7 @@ func scanCustomData(ctx context.Context, sink findings.Sink, subID, location, vm
 					"source":          "custom_data",
 					"line_number":     lineNum + 1,
 					"pattern_matched": patName,
+					"content":         line,
 				},
 			})
 		}
@@ -199,6 +200,7 @@ func scanExtensionSettings(ctx context.Context, sink findings.Sink, subID, locat
 				"extension":       extName,
 				"source":          "extension_settings",
 				"pattern_matched": patName,
+				"content":         settingsJSON,
 			},
 		})
 	}
@@ -225,11 +227,12 @@ func scanMapKeys(ctx context.Context, sink findings.Sink, subID, location, vmID,
 						ResourceID:     vmID,
 						Title:          fmt.Sprintf("VM %s extension %s has suspicious setting key %q", vmName, extName, key),
 						Detail: map[string]any{
-							"vm_name":    vmName,
-							"extension":  extName,
-							"source":     "extension_settings",
-							"key":        key,
-							"reason":     "key name matches secret pattern in non-protected settings",
+							"vm_name":   vmName,
+							"extension": extName,
+							"source":    "extension_settings",
+							"key":       key,
+							"reason":    "key name matches secret pattern in non-protected settings",
+							"value":     valStr,
 						},
 					})
 				}

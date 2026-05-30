@@ -55,6 +55,31 @@ func (Module) Requires() []string {
 	}
 }
 
+// verificationProtectedSuffixes are Azure service domains where binding a
+// custom domain requires proving ownership of the source DNS name first
+// (the `asuid.<host>` / `awverify` TXT verification record). For these, a
+// dangling or NXDOMAIN CNAME is NOT directly takeoverable: even if an
+// attacker recreates a resource with the same hostname, Azure refuses to
+// bind the victim's custom domain without the verification record. Flagging
+// these as critical takeovers produces false positives, so we downgrade
+// them to an informational Low finding.
+var verificationProtectedSuffixes = []string{
+	"azurewebsites.net",  // App Service
+	"azurestaticapps.net", // Static Web Apps
+}
+
+// isVerificationProtected reports whether the CNAME target points at an
+// Azure service that enforces domain-ownership verification.
+func isVerificationProtected(host string) bool {
+	lower := strings.ToLower(strings.TrimSuffix(host, "."))
+	for _, suf := range verificationProtectedSuffixes {
+		if lower == suf || strings.HasSuffix(lower, "."+suf) {
+			return true
+		}
+	}
+	return false
+}
+
 // probeResult holds the outcome of a CNAME DNS+HTTP probe.
 type probeResult struct {
 	NXDomain   bool
@@ -140,6 +165,36 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 				}
 
 				result := probeCNAME(ctx, httpClient, fqdn)
+
+				// Verification-protected services (App Service, Static Web
+				// Apps) require an asuid/awverify TXT record before a custom
+				// domain can be bound, so a dangling CNAME is not directly
+				// takeoverable. Downgrade to an informational Low finding
+				// instead of a critical/high takeover claim, and only when
+				// the record actually appears dangling.
+				if isVerificationProtected(cnameValue) {
+					dangling := result.NXDomain ||
+						(result.Err == nil && matchHTTPFingerprint(cnameValue, result.Body, result.HTTPStatus, fingerprints) != nil)
+					if dangling {
+						_ = sink.Write(ctx, findings.Finding{
+							SubscriptionID: target.SubscriptionID,
+							Region:         "global",
+							Module:         "subdomain_takeover",
+							Severity:       findings.SevLow,
+							ResourceID:     ptrVal(rs.ID),
+							Title:          fmt.Sprintf("Dangling CNAME %s -> %s (verification-protected, takeover unlikely)", fqdn, cnameValue),
+							Detail: map[string]any{
+								"fqdn":         fqdn,
+								"cname_target": cnameValue,
+								"nxdomain":     result.NXDomain,
+								"zone":         zone.Name,
+								"record_set":   rsName,
+								"reason":       "target service requires domain-ownership verification (asuid/awverify TXT record) before a custom domain can be bound, so this dangling CNAME is not directly takeoverable",
+							},
+						})
+					}
+					continue
+				}
 
 				if result.NXDomain {
 					// Check if the CNAME target matches a known vulnerable service.

@@ -135,6 +135,7 @@ func scanParamMap(ctx context.Context, sink findings.Sink, subID, deplID, rg, de
 					"source":          source,
 					"key":             key,
 					"pattern_matched": patName,
+					"value":           valStr,
 				},
 			})
 			continue
@@ -154,6 +155,7 @@ func scanParamMap(ctx context.Context, sink findings.Sink, subID, deplID, rg, de
 					"source":         source,
 					"key":            key,
 					"reason":         "key name matches secret pattern but parameter type is not secureString",
+					"value":          valStr,
 				},
 			})
 		}

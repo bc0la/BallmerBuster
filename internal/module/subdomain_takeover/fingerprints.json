@@ -4,7 +4,6 @@
     "cname": [
       "cloudapp.net",
       "cloudapp.azure.com",
-      "azurewebsites.net",
       "blob.core.windows.net",
       "azure-api.net",
       "azurehdinsight.net",
@@ -18,7 +17,6 @@
       "servicebus.windows.net",
       "visualstudio.com",
       "azurefd.net",
-      "azurestaticapps.net",
       "trafficmanager.net",
       "azuremicroservices.io"
     ],

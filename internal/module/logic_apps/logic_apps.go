@@ -266,13 +266,13 @@ func listWorkflows(ctx context.Context, cred azcore.TokenCredential, subID strin
 // Bounds for run sampling. Logic App workflows can have thousands of run
 // records and each run triggers per-action input+output blob fetches —
 // scanning all of them dominates engagement time. We sample the newest
-// runsNewest runs plus the oldest runsOldest runs (chronologically the
+// runsNewest run plus the oldest runsOldest run (chronologically the
 // "first" and "last" runs), capping pagination so workflows with millions
 // of runs don't stall a scan. Per-run action+content fetches run in
 // parallel across runScanWorkers goroutines.
 const (
-	runsNewest          = 5
-	runsOldest          = 5
+	runsNewest          = 1
+	runsOldest          = 1
 	runsMaxPagesScanned = 50 // safety cap on how far we walk for oldest
 	runScanWorkers      = 5
 	workflowWorkers     = 5 // concurrent workflows scanned per subscription
@@ -501,9 +501,10 @@ func scanActionLink(ctx context.Context, uri, direction, wfName, wfLocation, wfI
 					wfName, actionName, direction, sp.name),
 				Detail: map[string]any{
 					"workflow_name":   wfName,
-					"action_name":    actionName,
-					"direction":      direction,
+					"action_name":     actionName,
+					"direction":       direction,
 					"pattern_matched": sp.name,
+					"content":         content,
 				},
 			})
 			// Report each pattern only once per action+direction.
@@ -520,9 +521,10 @@ func scanActionLink(ctx context.Context, uri, direction, wfName, wfLocation, wfI
 				wfName, actionName, direction),
 			Detail: map[string]any{
 				"workflow_name": wfName,
-				"action_name":  actionName,
-				"direction":    direction,
-				"reason":       "action data contains keys matching secret name patterns",
+				"action_name":   actionName,
+				"direction":     direction,
+				"reason":        "action data contains keys matching secret name patterns",
+				"content":       content,
 			},
 		})
 	}
