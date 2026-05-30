@@ -269,26 +269,38 @@ func scanAzureCNAME(
 	}
 
 	if svc.VerificationProtected {
-		// App Service / Static Web Apps require an asuid TXT (or legacy
-		// awverify) record proving domain ownership before the custom domain
-		// can be bound. Re-registering the app name is necessary but not
-		// sufficient. Report as Medium for manual confirmation, and note
-		// whether a (potentially stale) verification record is present.
-		verName, hasVerification := lookupVerificationRecord(recordNames, recordName)
-		detail["verification_required"] = "asuid TXT / awverify record"
-		detail["verification_record_present"] = hasVerification
-		if hasVerification {
-			detail["verification_record"] = verName
+		// App Service / Static Web Apps are protected ONLY if the customer
+		// opted in by publishing an asuid.{label} TXT record holding their
+		// app's Domain Verification ID. Per Microsoft's guidance, when that
+		// record exists no other subscription can validate the custom domain,
+		// so a takeover is blocked even though the freed app name is
+		// re-registrable. When the record is ABSENT (the common case), an
+		// attacker who re-creates the app with the freed name can validate the
+		// custom domain via the dangling CNAME itself, completing the takeover.
+		asuidName, hasASUID := lookupVerificationRecord(recordNames, recordName)
+		detail["asuid_record_present"] = hasASUID
+		if hasASUID {
+			detail["asuid_record"] = asuidName
+			detail["reason"] = "the target resource name is unregistered and claimable, but an asuid domain-verification TXT record is present. Per Azure, while this record exists no other subscription can validate the custom domain, so takeover is blocked unless the verification ID itself is recoverable. Low risk — still clean up the dangling CNAME."
+			_ = sink.Write(ctx, findings.Finding{
+				SubscriptionID: target.SubscriptionID,
+				Region:         "global",
+				Module:         "subdomain_takeover",
+				Severity:       findings.SevLow,
+				ResourceID:     recordID,
+				Title:          fmt.Sprintf("Dangling CNAME %s -> %s (%s name claimable; protected by asuid verification)", fqdn, cnameTarget, svc.Service),
+				Detail:         detail,
+			})
+			return
 		}
-		detail["reason"] = "resource name is unregistered and claimable, but serving content on this custom domain additionally requires Azure domain-ownership verification (asuid/awverify). Takeover is only possible if that verification can also be satisfied (e.g. a stale verification record or pre-validation gap). Manually confirm before reporting."
-
+		detail["reason"] = "the target resource name is unregistered and claimable, and NO asuid domain-verification TXT record is present. An attacker can re-create the " + svc.Service + " with this name and validate the custom domain using the dangling CNAME itself, completing the takeover."
 		_ = sink.Write(ctx, findings.Finding{
 			SubscriptionID: target.SubscriptionID,
 			Region:         "global",
 			Module:         "subdomain_takeover",
-			Severity:       findings.SevMedium,
+			Severity:       findings.SevHigh,
 			ResourceID:     recordID,
-			Title:          fmt.Sprintf("Dangling CNAME %s -> %s (%s name claimable; domain-verification required)", fqdn, cnameTarget, svc.Service),
+			Title:          fmt.Sprintf("Dangling CNAME %s -> %s (%s, takeover likely; no domain-verification record)", fqdn, cnameTarget, svc.Service),
 			Detail:         detail,
 		})
 		return
@@ -366,20 +378,17 @@ func scanThirdPartyCNAME(
 	}
 }
 
-// lookupVerificationRecord reports whether the zone contains an App Service
-// domain-verification record (asuid TXT or legacy awverify) for the given
-// CNAME label.
+// lookupVerificationRecord reports whether the zone contains an App Service /
+// Static Web Apps domain-verification record (asuid.{label} TXT, or asuid at
+// the apex) for the given CNAME label. Only asuid confers protection; the
+// legacy awverify method is deprecated and does not block takeover.
 func lookupVerificationRecord(recordNames map[string]bool, label string) (string, bool) {
-	var candidates []string
+	candidate := "asuid." + label
 	if label == "@" {
-		candidates = []string{"asuid", "awverify"}
-	} else {
-		candidates = []string{"asuid." + label, "awverify." + label}
+		candidate = "asuid"
 	}
-	for _, c := range candidates {
-		if recordNames[strings.ToLower(c)] {
-			return c, true
-		}
+	if recordNames[strings.ToLower(candidate)] {
+		return candidate, true
 	}
 	return "", false
 }
