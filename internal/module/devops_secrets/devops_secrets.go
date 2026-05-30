@@ -270,6 +270,7 @@ func scanVariables(
 					"variable_name":   varName,
 					"pattern_matched": patName,
 					"resource_id":     resourceID,
+					"value":           value,
 				},
 			})
 			continue
@@ -292,6 +293,7 @@ func scanVariables(
 					"variable_name": varName,
 					"reason":        "key name matches secret pattern and value is plaintext (not marked isSecret)",
 					"resource_id":   resourceID,
+					"value":         value,
 				},
 			})
 		}
@@ -310,4 +312,3 @@ func matchSecretPattern(value string) string {
 	}
 	return ""
 }
-

@@ -30,11 +30,11 @@ func (Module) Requires() []string {
 
 // Compiled patterns (built once, reused across all apps).
 var (
-	keyPattern   = regexp.MustCompile(`(?i)(password|secret|token|api[_\-]?key|connection[_\-]?string|private[_\-]?key|credentials?)`)
-	valAWSKey    = regexp.MustCompile(`AKIA[0-9A-Z]{16}`)
-	valPEM       = regexp.MustCompile(`-----BEGIN .* PRIVATE KEY-----`)
-	valJWT       = regexp.MustCompile(`eyJ[A-Za-z0-9_-]+\.eyJ`)
-	valSlack     = regexp.MustCompile(`xox[bprs]-[0-9a-zA-Z-]+`)
+	keyPattern    = regexp.MustCompile(`(?i)(password|secret|token|api[_\-]?key|connection[_\-]?string|private[_\-]?key|credentials?)`)
+	valAWSKey     = regexp.MustCompile(`AKIA[0-9A-Z]{16}`)
+	valPEM        = regexp.MustCompile(`-----BEGIN .* PRIVATE KEY-----`)
+	valJWT        = regexp.MustCompile(`eyJ[A-Za-z0-9_-]+\.eyJ`)
+	valSlack      = regexp.MustCompile(`xox[bprs]-[0-9a-zA-Z-]+`)
 	valuePatterns = []*regexp.Regexp{valAWSKey, valPEM, valJWT, valSlack}
 	valueLabels   = []string{"AWS access key", "PEM private key", "JWT token", "Slack token"}
 )
@@ -96,6 +96,7 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 						"app_name":        appName,
 						"setting_key":     key,
 						"pattern_matched": label,
+						"value":           value,
 					},
 				})
 				continue // don't double-report for the same key
@@ -114,6 +115,7 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 						"app_name":    appName,
 						"setting_key": key,
 						"reason":      "key name matches secret pattern",
+						"value":       value,
 					},
 				})
 			}

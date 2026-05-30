@@ -322,10 +322,10 @@ func checkManagedIdentityExposure(ctx context.Context, target creds.Subscription
 // ---------------------------------------------------------------------------
 
 type spBasic struct {
-	ID                         string `json:"id"`
-	AppID                      string `json:"appId"`
-	DisplayName                string `json:"displayName"`
-	AppRoleAssignmentRequired  bool   `json:"appRoleAssignmentRequired"`
+	ID                        string `json:"id"`
+	AppID                     string `json:"appId"`
+	DisplayName               string `json:"displayName"`
+	AppRoleAssignmentRequired bool   `json:"appRoleAssignmentRequired"`
 }
 
 func checkNoAssignmentRequired(ctx context.Context, target creds.SubscriptionTarget,
@@ -378,7 +378,7 @@ var dangerousAppRoles = map[string]findings.Severity{
 	"Mail.Send":                          findings.SevHigh,
 	"Files.ReadWrite.All":                findings.SevHigh,
 	"User.ReadWrite.All":                 findings.SevHigh,
-	"GroupMember.ReadWrite.All":           findings.SevHigh,
+	"GroupMember.ReadWrite.All":          findings.SevHigh,
 	"Sites.ReadWrite.All":                findings.SevHigh,
 }
 
@@ -521,8 +521,8 @@ func checkCrossTenantAccess(ctx context.Context, target creds.SubscriptionTarget
 		var partner struct {
 			TenantID     string `json:"tenantId"`
 			InboundTrust *struct {
-				IsMFAAccepted              *bool `json:"isMfaAccepted"`
-				IsCompliantDeviceAccepted  *bool `json:"isCompliantDeviceAccepted"`
+				IsMFAAccepted                 *bool `json:"isMfaAccepted"`
+				IsCompliantDeviceAccepted     *bool `json:"isCompliantDeviceAccepted"`
 				IsHybridAzureADJoinedAccepted *bool `json:"isHybridAzureADJoinedAccepted"`
 			} `json:"inboundTrust"`
 			B2BCollaborationInbound *struct {
@@ -555,26 +555,33 @@ func checkCrossTenantAccess(ctx context.Context, target creds.SubscriptionTarget
 			}
 		}
 
-		if !hasInboundTrust && !broadAccess {
-			continue
-		}
-
+		// Every cross-tenant partner is an external trust relationship —
+		// surface all of them. Benign partners (no inbound trust, no broad
+		// app access) become info findings so the analyst can review every
+		// external tenant the directory trusts.
 		sev := findings.SevMedium
 		title := fmt.Sprintf("Cross-tenant inbound trust configured for tenant %s", partnerTenantID)
 
-		if broadAccess && hasInboundTrust {
+		switch {
+		case broadAccess && hasInboundTrust:
 			sev = findings.SevHigh
 			title = fmt.Sprintf("Cross-tenant partner %s has inbound trust AND allows all applications", partnerTenantID)
-		} else if broadAccess {
+		case broadAccess:
 			sev = findings.SevHigh
 			title = fmt.Sprintf("Cross-tenant partner %s allows all applications for B2B collaboration", partnerTenantID)
+		case !hasInboundTrust && !broadAccess:
+			sev = findings.SevInfo
+			title = fmt.Sprintf("Cross-tenant partner %s configured (no inbound trust, no broad app access)", partnerTenantID)
 		}
 
 		detail := map[string]any{
-			"tenant_id":          target.TenantID,
-			"partner_tenant_id":  partnerTenantID,
-			"has_inbound_trust":  hasInboundTrust,
-			"broad_app_access":   broadAccess,
+			"tenant_id":         target.TenantID,
+			"partner_tenant_id": partnerTenantID,
+			"has_inbound_trust": hasInboundTrust,
+			"broad_app_access":  broadAccess,
+		}
+		if partner.B2BCollaborationInbound != nil && partner.B2BCollaborationInbound.Applications != nil {
+			detail["b2b_inbound_access_type"] = partner.B2BCollaborationInbound.Applications.AccessType
 		}
 		if partner.InboundTrust != nil {
 			detail["mfa_accepted"] = boolVal(partner.InboundTrust.IsMFAAccepted)
@@ -599,4 +606,3 @@ func boolVal(b *bool) bool {
 	}
 	return *b
 }
-

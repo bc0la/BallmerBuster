@@ -199,8 +199,21 @@ func checkFederatedIdentityCredentials(ctx context.Context, target creds.Subscri
 			}
 
 			assess := evaluateFederatedCredential(app, fic)
-			if assess.Severity == "" {
-				continue
+
+			// Federated identity credentials are external trust
+			// relationships — surface every one, even well-scoped ones,
+			// so the analyst can manually confirm the issuer/subject. A
+			// benign assessment (empty severity) becomes an info finding.
+			severity := assess.Severity
+			title := assess.Title
+			category := assess.Category
+			reason := assess.Reason
+			if severity == "" {
+				severity = findings.SevInfo
+				title = fmt.Sprintf("App %q has federated identity credential %q (issuer %s)",
+					app.DisplayName, fic.Name, fic.Issuer)
+				category = "fed_reviewed"
+				reason = "federated identity credential reviewed; subject appears appropriately scoped for its issuer"
 			}
 
 			detail := map[string]any{
@@ -213,15 +226,15 @@ func checkFederatedIdentityCredentials(ctx context.Context, target creds.Subscri
 				"subject":      fic.Subject,
 				"audiences":    fic.Audiences,
 				"description":  fic.Description,
-				"category":     assess.Category,
-				"reason":       assess.Reason,
+				"category":     category,
+				"reason":       reason,
 			}
 
 			emit(findings.Finding{
 				Region:     "global",
-				Severity:   assess.Severity,
+				Severity:   severity,
 				ResourceID: fmt.Sprintf("/tenants/%s/applications/%s/federatedIdentityCredentials/%s", target.TenantID, app.AppID, fic.ID),
-				Title:      assess.Title,
+				Title:      title,
 				Detail:     detail,
 			})
 		}

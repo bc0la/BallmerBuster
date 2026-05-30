@@ -256,6 +256,7 @@ func checkVariables(ctx context.Context, cred azcore.TokenCredential,
 						"variable_name":   v.Name,
 						"is_encrypted":    false,
 						"pattern_matched": patName,
+						"value":           v.Props.Value,
 					},
 				})
 				continue // don't double-report
@@ -275,6 +276,7 @@ func checkVariables(ctx context.Context, cred azcore.TokenCredential,
 					"variable_name": v.Name,
 					"is_encrypted":  false,
 					"reason":        "variable name matches secret key pattern but is not encrypted",
+					"value":         v.Props.Value,
 				},
 			})
 		}
@@ -380,6 +382,7 @@ func checkRunbooks(ctx context.Context, cred azcore.TokenCredential,
 							"runbook_name":    rb.Name,
 							"line_number":     lineNum + 1,
 							"pattern_matched": sp.name,
+							"content":         line,
 						},
 					})
 				}
@@ -447,6 +450,7 @@ func checkJobs(ctx context.Context, cred azcore.TokenCredential,
 						"job_id":          job.Name,
 						"runbook_name":    runbookName,
 						"pattern_matched": sp.name,
+						"content":         output,
 					},
 				})
 			}
@@ -497,8 +501,8 @@ func checkConnections(ctx context.Context, cred azcore.TokenCredential,
 
 	for _, r := range raw {
 		var conn struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
+			ID    string `json:"id"`
+			Name  string `json:"name"`
 			Props struct {
 				ConnectionType struct {
 					Name string `json:"name"`

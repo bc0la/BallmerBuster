@@ -138,10 +138,11 @@ func scanEnvVars(ctx context.Context, sink findings.Sink, subID, location, cgID,
 				ResourceID:     cgID,
 				Title:          fmt.Sprintf("Container %s/%s env var %q matches secret pattern (%s)", cgName, containerName, name, patName),
 				Detail: map[string]any{
-					"container_group":  cgName,
-					"container":        containerName,
-					"env_var_name":     name,
-					"pattern_matched":  patName,
+					"container_group": cgName,
+					"container":       containerName,
+					"env_var_name":    name,
+					"pattern_matched": patName,
+					"value":           value,
 				},
 			})
 			continue
@@ -161,6 +162,7 @@ func scanEnvVars(ctx context.Context, sink findings.Sink, subID, location, cgID,
 					"container":       containerName,
 					"env_var_name":    name,
 					"reason":          "key name matches secret pattern and value is plaintext (not secureValue)",
+					"value":           value,
 				},
 			})
 		}
