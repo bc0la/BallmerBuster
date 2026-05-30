@@ -24,7 +24,10 @@ func init() { module.Register(Module{}) }
 //go:embed fingerprints.json
 var fingerprintsJSON []byte
 
-// fingerprint describes a known service pattern for subdomain takeover.
+// fingerprint describes a known third-party service pattern for subdomain
+// takeover (GitHub Pages, Heroku, Shopify, ...). Azure services are handled
+// separately in azureServices because their takeover signal is structural
+// (NXDOMAIN on the resource hostname) rather than an HTTP body string.
 type fingerprint struct {
 	Service     string   `json:"service"`
 	CNAME       []string `json:"cname"`
@@ -42,6 +45,67 @@ func init() {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Azure service catalogue
+// ---------------------------------------------------------------------------
+
+// azureService is an Azure resource type whose public hostname can be claimed
+// by an attacker if the underlying resource is deleted but a CNAME still
+// points at it. The canonical takeover signal for every one of these is the
+// same: the target hostname (e.g. theapp.azurewebsites.net) resolves to
+// NXDOMAIN, meaning the resource no longer exists and the name is free to
+// re-register. See https://www.stratussecurity.com/post/azure-subdomain-takeover-guide
+type azureService struct {
+	Suffix  string
+	Service string
+	// VerificationProtected is true for services that additionally require a
+	// domain-ownership verification record (asuid TXT / awverify) before a
+	// custom domain can be bound. Re-registering the resource name is NOT by
+	// itself sufficient to serve content on the victim's custom domain, so a
+	// dangling CNAME alone is a weaker (manual-confirmation) finding rather
+	// than a confirmed takeover.
+	VerificationProtected bool
+}
+
+// azureServices is matched longest-suffix-first so that, e.g.,
+// blob.core.windows.net wins over a hypothetical windows.net entry.
+var azureServices = []azureService{
+	{Suffix: "azurewebsites.net", Service: "App Service", VerificationProtected: true},
+	{Suffix: "azurestaticapps.net", Service: "Static Web Apps", VerificationProtected: true},
+	{Suffix: "cloudapp.net", Service: "Cloud Services (classic)"},
+	{Suffix: "cloudapp.azure.com", Service: "Virtual Machine public IP"},
+	{Suffix: "azureedge.net", Service: "Azure CDN"},
+	{Suffix: "azurefd.net", Service: "Front Door (classic)"},
+	{Suffix: "trafficmanager.net", Service: "Traffic Manager"},
+	{Suffix: "blob.core.windows.net", Service: "Blob Storage"},
+	{Suffix: "azure-api.net", Service: "API Management"},
+	{Suffix: "database.windows.net", Service: "Azure SQL"},
+	{Suffix: "azuredatalakestore.net", Service: "Data Lake Store Gen1"},
+	{Suffix: "search.windows.net", Service: "AI Search"},
+	{Suffix: "azurecr.io", Service: "Container Registry"},
+	{Suffix: "azurecontainer.io", Service: "Container Instances"},
+	{Suffix: "redis.cache.windows.net", Service: "Redis Cache"},
+	{Suffix: "servicebus.windows.net", Service: "Service Bus"},
+	{Suffix: "azurehdinsight.net", Service: "HDInsight"},
+	{Suffix: "azuremicroservices.io", Service: "Service Fabric Mesh"},
+}
+
+// matchAzureService returns the most specific Azure service whose suffix the
+// host matches, or nil if the host is not an Azure service hostname.
+func matchAzureService(host string) *azureService {
+	lower := strings.ToLower(strings.TrimSuffix(host, "."))
+	var best *azureService
+	for i := range azureServices {
+		svc := &azureServices[i]
+		if lower == svc.Suffix || strings.HasSuffix(lower, "."+svc.Suffix) {
+			if best == nil || len(svc.Suffix) > len(best.Suffix) {
+				best = svc
+			}
+		}
+	}
+	return best
+}
+
 // Module scans Azure DNS zones for dangling CNAME records that are
 // susceptible to subdomain takeover.
 type Module struct{}
@@ -55,32 +119,7 @@ func (Module) Requires() []string {
 	}
 }
 
-// verificationProtectedSuffixes are Azure service domains where binding a
-// custom domain requires proving ownership of the source DNS name first
-// (the `asuid.<host>` / `awverify` TXT verification record). For these, a
-// dangling or NXDOMAIN CNAME is NOT directly takeoverable: even if an
-// attacker recreates a resource with the same hostname, Azure refuses to
-// bind the victim's custom domain without the verification record. Flagging
-// these as critical takeovers produces false positives, so we downgrade
-// them to an informational Low finding.
-var verificationProtectedSuffixes = []string{
-	"azurewebsites.net",  // App Service
-	"azurestaticapps.net", // Static Web Apps
-}
-
-// isVerificationProtected reports whether the CNAME target points at an
-// Azure service that enforces domain-ownership verification.
-func isVerificationProtected(host string) bool {
-	lower := strings.ToLower(strings.TrimSuffix(host, "."))
-	for _, suf := range verificationProtectedSuffixes {
-		if lower == suf || strings.HasSuffix(lower, "."+suf) {
-			return true
-		}
-	}
-	return false
-}
-
-// probeResult holds the outcome of a CNAME DNS+HTTP probe.
+// probeResult holds the outcome of a CNAME DNS+HTTP probe (third-party path).
 type probeResult struct {
 	NXDomain   bool
 	HTTPStatus int
@@ -138,6 +177,18 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 	for zi, zone := range zones {
 		log("info", fmt.Sprintf("zone %d/%d: %s", zi+1, len(zones), zone.Name))
 
+		// Gather every record set in the zone up front so we can both iterate
+		// CNAMEs and look up the domain-verification (asuid/awverify) records
+		// that accompany App Service / Static Web Apps custom domains.
+		type cnameRecord struct {
+			ID    string
+			Name  string
+			FQDN  string
+			CNAME string
+		}
+		var cnames []cnameRecord
+		recordNames := map[string]bool{}
+
 		rPager := recordsClient.NewListAllByDNSZonePager(zone.RG, zone.Name, nil)
 		for rPager.More() {
 			page, err := rPager.NextPage(ctx)
@@ -145,8 +196,9 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 				log("warn", fmt.Sprintf("list records for zone %s: %v", zone.Name, err))
 				break
 			}
-
 			for _, rs := range page.Value {
+				rsName := ptrVal(rs.Name)
+				recordNames[strings.ToLower(rsName)] = true
 				if rs.Properties == nil || rs.Properties.CnameRecord == nil {
 					continue
 				}
@@ -154,115 +206,196 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 				if cnameValue == "" {
 					continue
 				}
-
-				// Build the FQDN of this record.
-				rsName := ptrVal(rs.Name)
-				var fqdn string
-				if rsName == "@" {
-					fqdn = zone.Name
-				} else {
+				fqdn := zone.Name
+				if rsName != "@" {
 					fqdn = rsName + "." + zone.Name
 				}
-
-				result := probeCNAME(ctx, httpClient, fqdn)
-
-				// Verification-protected services (App Service, Static Web
-				// Apps) require an asuid/awverify TXT record before a custom
-				// domain can be bound, so a dangling CNAME is not directly
-				// takeoverable. Downgrade to an informational Low finding
-				// instead of a critical/high takeover claim, and only when
-				// the record actually appears dangling.
-				if isVerificationProtected(cnameValue) {
-					dangling := result.NXDomain ||
-						(result.Err == nil && matchHTTPFingerprint(cnameValue, result.Body, result.HTTPStatus, fingerprints) != nil)
-					if dangling {
-						_ = sink.Write(ctx, findings.Finding{
-							SubscriptionID: target.SubscriptionID,
-							Region:         "global",
-							Module:         "subdomain_takeover",
-							Severity:       findings.SevLow,
-							ResourceID:     ptrVal(rs.ID),
-							Title:          fmt.Sprintf("Dangling CNAME %s -> %s (verification-protected, takeover unlikely)", fqdn, cnameValue),
-							Detail: map[string]any{
-								"fqdn":         fqdn,
-								"cname_target": cnameValue,
-								"nxdomain":     result.NXDomain,
-								"zone":         zone.Name,
-								"record_set":   rsName,
-								"reason":       "target service requires domain-ownership verification (asuid/awverify TXT record) before a custom domain can be bound, so this dangling CNAME is not directly takeoverable",
-							},
-						})
-					}
-					continue
-				}
-
-				if result.NXDomain {
-					// Check if the CNAME target matches a known vulnerable service.
-					fp := matchNXDomainFingerprint(cnameValue, fingerprints)
-					if fp != nil {
-						_ = sink.Write(ctx, findings.Finding{
-							SubscriptionID: target.SubscriptionID,
-							Region:         "global",
-							Module:         "subdomain_takeover",
-							Severity:       findings.SevCritical,
-							ResourceID:     ptrVal(rs.ID),
-							Title:          fmt.Sprintf("Dangling CNAME %s -> %s (%s, takeover likely)", fqdn, cnameValue, fp.Service),
-							Detail: map[string]any{
-								"fqdn":         fqdn,
-								"cname_target": cnameValue,
-								"service":      fp.Service,
-								"nxdomain":     true,
-								"zone":         zone.Name,
-								"record_set":   rsName,
-							},
-						})
-					} else {
-						// NXDOMAIN but no fingerprint match — still suspicious.
-						_ = sink.Write(ctx, findings.Finding{
-							SubscriptionID: target.SubscriptionID,
-							Region:         "global",
-							Module:         "subdomain_takeover",
-							Severity:       findings.SevHigh,
-							ResourceID:     ptrVal(rs.ID),
-							Title:          fmt.Sprintf("Dangling CNAME %s -> %s (NXDOMAIN, unverified service)", fqdn, cnameValue),
-							Detail: map[string]any{
-								"fqdn":         fqdn,
-								"cname_target": cnameValue,
-								"nxdomain":     true,
-								"zone":         zone.Name,
-								"record_set":   rsName,
-							},
-						})
-					}
-				} else if result.Err == nil {
-					// DNS resolved — check HTTP fingerprints.
-					fp := matchHTTPFingerprint(cnameValue, result.Body, result.HTTPStatus, fingerprints)
-					if fp != nil {
-						_ = sink.Write(ctx, findings.Finding{
-							SubscriptionID: target.SubscriptionID,
-							Region:         "global",
-							Module:         "subdomain_takeover",
-							Severity:       findings.SevCritical,
-							ResourceID:     ptrVal(rs.ID),
-							Title:          fmt.Sprintf("Dangling CNAME %s -> %s (%s, HTTP fingerprint matched)", fqdn, cnameValue, fp.Service),
-							Detail: map[string]any{
-								"fqdn":         fqdn,
-								"cname_target": cnameValue,
-								"service":      fp.Service,
-								"http_status":  result.HTTPStatus,
-								"nxdomain":     false,
-								"zone":         zone.Name,
-								"record_set":   rsName,
-							},
-						})
-					}
-				}
+				cnames = append(cnames, cnameRecord{
+					ID: ptrVal(rs.ID), Name: rsName, FQDN: fqdn, CNAME: cnameValue,
+				})
 			}
+		}
+
+		for _, rec := range cnames {
+			if svc := matchAzureService(rec.CNAME); svc != nil {
+				scanAzureCNAME(ctx, sink, target, zone.Name, rec.ID, rec.Name, rec.FQDN, rec.CNAME, svc, recordNames, log)
+				continue
+			}
+
+			// Non-Azure target: fall back to the third-party fingerprint
+			// catalogue (resolves-but-dangling HTTP bodies, NXDOMAIN, ...).
+			scanThirdPartyCNAME(ctx, httpClient, sink, target, zone.Name, rec.ID, rec.Name, rec.FQDN, rec.CNAME)
 		}
 	}
 
 	log("info", "subdomain takeover checks complete")
 	return nil
+}
+
+// scanAzureCNAME applies the structural NXDOMAIN-on-target check to a CNAME
+// pointing at an Azure service hostname.
+func scanAzureCNAME(
+	ctx context.Context,
+	sink findings.Sink,
+	target creds.SubscriptionTarget,
+	zoneName, recordID, recordName, fqdn, cnameTarget string,
+	svc *azureService,
+	recordNames map[string]bool,
+	log func(level, msg string),
+) {
+	nx, err := targetIsNXDomain(ctx, cnameTarget)
+	if err != nil {
+		log("warn", fmt.Sprintf("resolve %s: %v", cnameTarget, err))
+		return
+	}
+	if !nx {
+		// The Azure resource still exists (the hostname resolves), so it is
+		// owned by someone and cannot be claimed. This is the case that
+		// previously caused false positives: a live App Service whose custom
+		// domain happens to be unbound still serves a "Web Site not found"
+		// page, but is NOT takeoverable. Emit nothing.
+		return
+	}
+
+	// Target is NXDOMAIN: the named resource is gone and the hostname is free
+	// to re-register.
+	detail := map[string]any{
+		"fqdn":          fqdn,
+		"cname_target":  cnameTarget,
+		"service":       svc.Service,
+		"target_status": "NXDOMAIN",
+		"zone":          zoneName,
+		"record_set":    recordName,
+	}
+
+	if svc.VerificationProtected {
+		// App Service / Static Web Apps require an asuid TXT (or legacy
+		// awverify) record proving domain ownership before the custom domain
+		// can be bound. Re-registering the app name is necessary but not
+		// sufficient. Report as Medium for manual confirmation, and note
+		// whether a (potentially stale) verification record is present.
+		verName, hasVerification := lookupVerificationRecord(recordNames, recordName)
+		detail["verification_required"] = "asuid TXT / awverify record"
+		detail["verification_record_present"] = hasVerification
+		if hasVerification {
+			detail["verification_record"] = verName
+		}
+		detail["reason"] = "resource name is unregistered and claimable, but serving content on this custom domain additionally requires Azure domain-ownership verification (asuid/awverify). Takeover is only possible if that verification can also be satisfied (e.g. a stale verification record or pre-validation gap). Manually confirm before reporting."
+
+		_ = sink.Write(ctx, findings.Finding{
+			SubscriptionID: target.SubscriptionID,
+			Region:         "global",
+			Module:         "subdomain_takeover",
+			Severity:       findings.SevMedium,
+			ResourceID:     recordID,
+			Title:          fmt.Sprintf("Dangling CNAME %s -> %s (%s name claimable; domain-verification required)", fqdn, cnameTarget, svc.Service),
+			Detail:         detail,
+		})
+		return
+	}
+
+	// Non-verification Azure services: re-registering the resource name with
+	// the same hostname is sufficient to take over the subdomain.
+	_ = sink.Write(ctx, findings.Finding{
+		SubscriptionID: target.SubscriptionID,
+		Region:         "global",
+		Module:         "subdomain_takeover",
+		Severity:       findings.SevCritical,
+		ResourceID:     recordID,
+		Title:          fmt.Sprintf("Dangling CNAME %s -> %s (%s, takeover likely)", fqdn, cnameTarget, svc.Service),
+		Detail:         detail,
+	})
+}
+
+// scanThirdPartyCNAME handles CNAMEs that point outside Azure, using the
+// HTTP-body / NXDOMAIN fingerprint catalogue.
+func scanThirdPartyCNAME(
+	ctx context.Context,
+	httpClient *http.Client,
+	sink findings.Sink,
+	target creds.SubscriptionTarget,
+	zoneName, recordID, recordName, fqdn, cnameTarget string,
+) {
+	result := probeCNAME(ctx, httpClient, fqdn)
+
+	if result.NXDomain {
+		if fp := matchNXDomainFingerprint(cnameTarget, fingerprints); fp != nil {
+			_ = sink.Write(ctx, findings.Finding{
+				SubscriptionID: target.SubscriptionID,
+				Region:         "global",
+				Module:         "subdomain_takeover",
+				Severity:       findings.SevCritical,
+				ResourceID:     recordID,
+				Title:          fmt.Sprintf("Dangling CNAME %s -> %s (%s, takeover likely)", fqdn, cnameTarget, fp.Service),
+				Detail: map[string]any{
+					"fqdn":         fqdn,
+					"cname_target": cnameTarget,
+					"service":      fp.Service,
+					"nxdomain":     true,
+					"zone":         zoneName,
+					"record_set":   recordName,
+				},
+			})
+		}
+		return
+	}
+
+	if result.Err != nil {
+		return
+	}
+
+	// Host resolves — check HTTP body fingerprints.
+	if fp := matchHTTPFingerprint(cnameTarget, result.Body, result.HTTPStatus, fingerprints); fp != nil {
+		_ = sink.Write(ctx, findings.Finding{
+			SubscriptionID: target.SubscriptionID,
+			Region:         "global",
+			Module:         "subdomain_takeover",
+			Severity:       findings.SevCritical,
+			ResourceID:     recordID,
+			Title:          fmt.Sprintf("Dangling CNAME %s -> %s (%s, HTTP fingerprint matched)", fqdn, cnameTarget, fp.Service),
+			Detail: map[string]any{
+				"fqdn":         fqdn,
+				"cname_target": cnameTarget,
+				"service":      fp.Service,
+				"http_status":  result.HTTPStatus,
+				"nxdomain":     false,
+				"zone":         zoneName,
+				"record_set":   recordName,
+			},
+		})
+	}
+}
+
+// lookupVerificationRecord reports whether the zone contains an App Service
+// domain-verification record (asuid TXT or legacy awverify) for the given
+// CNAME label.
+func lookupVerificationRecord(recordNames map[string]bool, label string) (string, bool) {
+	var candidates []string
+	if label == "@" {
+		candidates = []string{"asuid", "awverify"}
+	} else {
+		candidates = []string{"asuid." + label, "awverify." + label}
+	}
+	for _, c := range candidates {
+		if recordNames[strings.ToLower(c)] {
+			return c, true
+		}
+	}
+	return "", false
+}
+
+// targetIsNXDomain resolves host directly and reports whether the lookup
+// returned NXDOMAIN (the resource hostname no longer exists).
+func targetIsNXDomain(ctx context.Context, host string) (bool, error) {
+	h := strings.TrimSuffix(host, ".")
+	_, err := net.DefaultResolver.LookupHost(ctx, h)
+	if err != nil {
+		if isNXDomain(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	return false, nil
 }
 
 // probeCNAME performs a DNS lookup on host. If the host resolves, it
