@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -17,6 +18,12 @@ import (
 )
 
 func init() { module.Register(Module{}) }
+
+// seenTenant tracks tenants already scanned, so these tenant-wide Entra ID
+// findings are not duplicated for every subscription in the tenant (the
+// scheduler invokes the module once per subscription). LoadOrStore is atomic,
+// electing a single winner across concurrent per-subscription invocations.
+var seenTenant sync.Map
 
 // Module detects Entra ID (Azure AD) misconfigurations via the
 // Microsoft Graph REST API.
@@ -36,6 +43,11 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 		f.SubscriptionID = target.SubscriptionID
 		f.Module = "entra_id"
 		_ = sink.Write(ctx, f)
+	}
+
+	if _, already := seenTenant.LoadOrStore(target.TenantID, true); already {
+		log("info", fmt.Sprintf("Entra ID checks already run for tenant %s via another subscription — skipping to avoid duplicate findings", target.TenantID))
+		return nil
 	}
 
 	log("info", "starting Entra ID checks for tenant "+target.TenantID)

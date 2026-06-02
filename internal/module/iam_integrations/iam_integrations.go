@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
@@ -50,45 +51,60 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 
 	log("info", "starting IAM integration checks for subscription "+target.SubscriptionID+" (tenant "+target.TenantID+")")
 
-	// 1. Managed identity exposure (ARM SDK).
+	// --- Subscription-scoped (ARM) checks — run for every subscription. ---
+
+	// Managed identity exposure on VMs.
 	log("info", "checking managed identity exposure on VMs")
 	if err := checkManagedIdentityExposure(ctx, target, emit, log); err != nil {
 		log("warn", fmt.Sprintf("managed identity exposure: %v", err))
 	}
 
-	// 2. Enterprise apps with no assignment required (Graph API).
-	log("info", "checking enterprise apps without user assignment requirement")
-	if err := checkNoAssignmentRequired(ctx, target, emit, log); err != nil {
-		log("warn", fmt.Sprintf("enterprise app assignment: %v", err))
-	}
-
-	// 3. Service principals with dangerous API permissions (Graph API).
-	log("info", "checking service principals for dangerous API permissions")
-	if err := checkDangerousAppPermissions(ctx, target, emit, log); err != nil {
-		log("warn", fmt.Sprintf("dangerous API permissions: %v", err))
-	}
-
-	// 4. Cross-tenant access settings (Graph API).
-	log("info", "checking cross-tenant access policy partners")
-	if err := checkCrossTenantAccess(ctx, target, emit, log); err != nil {
-		log("warn", fmt.Sprintf("cross-tenant access: %v", err))
-	}
-
-	// 5. Federated identity credentials on app registrations (Graph API).
-	log("info", "checking federated identity credentials on app registrations")
-	if err := checkAppRegistrationFICs(ctx, target, emit, log); err != nil {
-		log("warn", fmt.Sprintf("app registration federated credentials: %v", err))
-	}
-
-	// 6. Federated identity credentials on user-assigned managed identities (ARM).
+	// Federated identity credentials on user-assigned managed identities.
 	log("info", "checking federated identity credentials on managed identities")
 	if err := checkManagedIdentityFICs(ctx, target, emit, log); err != nil {
 		log("warn", fmt.Sprintf("managed identity federated credentials: %v", err))
 	}
 
-	// 7. Dangling OAuth redirect / reply / logout URIs (Graph API + DNS).
-	// Severity is scaled by each app's granted delegated permissions, since a
-	// captured redirect response carries on-behalf-of-the-user tokens.
+	// --- Tenant-scoped (Microsoft Graph) checks — run once per tenant. ---
+	//
+	// The scheduler invokes every module once per subscription, but these
+	// findings are tenant-wide (Entra ID is a tenant resource, not a
+	// subscription resource). Without this guard they would be re-emitted for
+	// every subscription in the tenant. The first subscription to reach this
+	// point for a given tenant runs them; the rest skip.
+	if _, already := seenTenantGraph.LoadOrStore(target.TenantID, true); already {
+		log("info", fmt.Sprintf("Entra/Graph checks already run for tenant %s via another subscription — skipping to avoid duplicate tenant-wide findings", target.TenantID))
+		log("info", "IAM integration checks complete")
+		return nil
+	}
+
+	// Enterprise apps with no assignment required.
+	log("info", "checking enterprise apps without user assignment requirement")
+	if err := checkNoAssignmentRequired(ctx, target, emit, log); err != nil {
+		log("warn", fmt.Sprintf("enterprise app assignment: %v", err))
+	}
+
+	// Service principals with dangerous API permissions.
+	log("info", "checking service principals for dangerous API permissions")
+	if err := checkDangerousAppPermissions(ctx, target, emit, log); err != nil {
+		log("warn", fmt.Sprintf("dangerous API permissions: %v", err))
+	}
+
+	// Cross-tenant access settings.
+	log("info", "checking cross-tenant access policy partners")
+	if err := checkCrossTenantAccess(ctx, target, emit, log); err != nil {
+		log("warn", fmt.Sprintf("cross-tenant access: %v", err))
+	}
+
+	// Federated identity credentials on app registrations.
+	log("info", "checking federated identity credentials on app registrations")
+	if err := checkAppRegistrationFICs(ctx, target, emit, log); err != nil {
+		log("warn", fmt.Sprintf("app registration federated credentials: %v", err))
+	}
+
+	// Dangling OAuth redirect / reply / logout URIs. Severity is scaled by each
+	// app's granted delegated permissions, since a captured redirect response
+	// carries on-behalf-of-the-user tokens.
 	log("info", "checking redirect/reply URIs for dangling hosts")
 	privIndex, _ := buildDelegatedPrivIndex(ctx, target, log)
 	if err := checkDanglingRedirectURIs(ctx, target, emit, log, privIndex); err != nil {
@@ -97,6 +113,25 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 
 	log("info", "IAM integration checks complete")
 	return nil
+}
+
+// seenTenantGraph tracks tenants whose tenant-wide Microsoft Graph checks have
+// already run, so they are not duplicated across subscriptions in the same
+// tenant. LoadOrStore is atomic, so concurrent per-subscription invocations
+// elect a single winner per tenant.
+var seenTenantGraph sync.Map
+
+// microsoftOwnerTenants are the tenant IDs that publish Microsoft first-party
+// service principals (Intune, Office 365, Microsoft Graph, ...). Apps owned by
+// these tenants are not the customer's to remediate and are overwhelming
+// noise, so service-principal enumeration skips them.
+var microsoftOwnerTenants = map[string]bool{
+	"f8cdef31-a31e-4b4a-93e4-5f571e91255a": true, // Microsoft Services
+	"72f988bf-86f1-41af-91ab-2d7cd011db47": true, // microsoft.com corporate tenant
+}
+
+func isMicrosoftFirstParty(appOwnerOrgID string) bool {
+	return microsoftOwnerTenants[strings.ToLower(appOwnerOrgID)]
 }
 
 // ---------------------------------------------------------------------------
@@ -349,12 +384,13 @@ type spBasic struct {
 	AppID                     string `json:"appId"`
 	DisplayName               string `json:"displayName"`
 	AppRoleAssignmentRequired bool   `json:"appRoleAssignmentRequired"`
+	AppOwnerOrganizationID    string `json:"appOwnerOrganizationId"`
 }
 
 func checkNoAssignmentRequired(ctx context.Context, target creds.SubscriptionTarget,
 	emit func(findings.Finding), log func(string, string)) error {
 
-	const url = "https://graph.microsoft.com/v1.0/servicePrincipals?$select=id,appId,displayName,appRoleAssignmentRequired&$filter=servicePrincipalType eq 'Application'"
+	const url = "https://graph.microsoft.com/v1.0/servicePrincipals?$select=id,appId,displayName,appRoleAssignmentRequired,appOwnerOrganizationId&$filter=servicePrincipalType eq 'Application'"
 	raw, err := graphList(ctx, target.Credential, url)
 	if err != nil {
 		return err
@@ -362,9 +398,16 @@ func checkNoAssignmentRequired(ctx context.Context, target creds.SubscriptionTar
 
 	log("info", fmt.Sprintf("found %d application service principals", len(raw)))
 
+	skippedMS := 0
 	for _, r := range raw {
 		var sp spBasic
 		if err := json.Unmarshal(r, &sp); err != nil {
+			continue
+		}
+		// Microsoft first-party apps (Intune, Office, Graph, ...) are not the
+		// customer's to remediate — skip to avoid drowning the report.
+		if isMicrosoftFirstParty(sp.AppOwnerOrganizationID) {
+			skippedMS++
 			continue
 		}
 		if sp.AppRoleAssignmentRequired {
@@ -383,6 +426,9 @@ func checkNoAssignmentRequired(ctx context.Context, target creds.SubscriptionTar
 				"display_name": sp.DisplayName,
 			},
 		})
+	}
+	if skippedMS > 0 {
+		log("info", fmt.Sprintf("skipped %d Microsoft first-party service principals", skippedMS))
 	}
 	return nil
 }
@@ -421,7 +467,7 @@ func checkDangerousAppPermissions(ctx context.Context, target creds.Subscription
 	emit func(findings.Finding), log func(string, string)) error {
 
 	// Step 1: list all application service principals.
-	const spURL = "https://graph.microsoft.com/v1.0/servicePrincipals?$filter=servicePrincipalType eq 'Application'&$select=id,appId,displayName"
+	const spURL = "https://graph.microsoft.com/v1.0/servicePrincipals?$filter=servicePrincipalType eq 'Application'&$select=id,appId,displayName,appOwnerOrganizationId"
 	spRaw, err := graphList(ctx, target.Credential, spURL)
 	if err != nil {
 		return err
@@ -440,11 +486,17 @@ func checkDangerousAppPermissions(ctx context.Context, target creds.Subscription
 	// Step 3: for each SP, list its appRoleAssignments and check for dangerous ones.
 	for _, r := range spRaw {
 		var sp struct {
-			ID          string `json:"id"`
-			AppID       string `json:"appId"`
-			DisplayName string `json:"displayName"`
+			ID                     string `json:"id"`
+			AppID                  string `json:"appId"`
+			DisplayName            string `json:"displayName"`
+			AppOwnerOrganizationID string `json:"appOwnerOrganizationId"`
 		}
 		if err := json.Unmarshal(r, &sp); err != nil {
+			continue
+		}
+		// Skip Microsoft first-party apps — they legitimately hold broad Graph
+		// permissions and are not the customer's to remediate.
+		if isMicrosoftFirstParty(sp.AppOwnerOrganizationID) {
 			continue
 		}
 
