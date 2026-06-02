@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -64,8 +65,10 @@ func runCmd(use, short, kind string) *cobra.Command {
 		engDir        string
 		moduleList    []string
 		noTUI         bool
-		noLogicApps   bool
 	)
+	// One --no-<module> flag per registered module; set flags add their module
+	// to the exclude list.
+	noFlags := map[string]*bool{}
 	c := &cobra.Command{
 		Use:   use,
 		Short: short,
@@ -87,9 +90,12 @@ func runCmd(use, short, kind string) *cobra.Command {
 			}
 
 			var exclude []string
-			if noLogicApps {
-				exclude = append(exclude, "logic_apps")
+			for name, b := range noFlags {
+				if *b {
+					exclude = append(exclude, name)
+				}
 			}
+			sort.Strings(exclude)
 
 			modules := selectModules(kind, moduleList, exclude)
 			if len(modules) == 0 {
@@ -129,7 +135,12 @@ func runCmd(use, short, kind string) *cobra.Command {
 	c.Flags().StringVar(&engDir, "engagement", "", "Existing engagement dir to append to (default: create new)")
 	c.Flags().StringSliceVar(&moduleList, "modules", nil, "Subset of modules to run (default: all of this kind)")
 	c.Flags().BoolVar(&noTUI, "no-tui", false, "Disable TUI; stream events as text")
-	c.Flags().BoolVar(&noLogicApps, "no-logic-apps", false, "Skip the logic_apps module")
+	for _, m := range module.All() {
+		name := m.Name()
+		b := new(bool)
+		noFlags[name] = b
+		c.Flags().BoolVar(b, "no-"+strings.ReplaceAll(name, "_", "-"), false, "Skip the "+name+" module")
+	}
 	return c
 }
 
