@@ -32,8 +32,6 @@ func (Module) Requires() []string {
 	return []string{
 		"Microsoft.Compute/virtualMachines/read",
 		"Microsoft.Authorization/roleAssignments/read",
-		"Microsoft.ManagedIdentity/userAssignedIdentities/read",
-		"Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/read",
 		"Directory.Read.All",
 		"Application.Read.All",
 	}
@@ -51,27 +49,16 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 
 	log("info", "starting IAM integration checks for subscription "+target.SubscriptionID+" (tenant "+target.TenantID+")")
 
-	// --- Subscription-scoped (ARM) checks — run for every subscription. ---
-
-	// Managed identity exposure on VMs.
+	// Subscription-scoped (ARM) check — run for every subscription.
 	log("info", "checking managed identity exposure on VMs")
 	if err := checkManagedIdentityExposure(ctx, target, emit, log); err != nil {
 		log("warn", fmt.Sprintf("managed identity exposure: %v", err))
 	}
 
-	// Federated identity credentials on user-assigned managed identities.
-	log("info", "checking federated identity credentials on managed identities")
-	if err := checkManagedIdentityFICs(ctx, target, emit, log); err != nil {
-		log("warn", fmt.Sprintf("managed identity federated credentials: %v", err))
-	}
-
-	// --- Tenant-scoped (Microsoft Graph) checks — run once per tenant. ---
-	//
-	// The scheduler invokes every module once per subscription, but these
-	// findings are tenant-wide (Entra ID is a tenant resource, not a
-	// subscription resource). Without this guard they would be re-emitted for
-	// every subscription in the tenant. The first subscription to reach this
-	// point for a given tenant runs them; the rest skip.
+	// Tenant-scoped (Microsoft Graph) checks — run once per tenant. The
+	// scheduler invokes every module once per subscription, but these findings
+	// are tenant-wide, so without this guard they'd be re-emitted for every
+	// subscription in the tenant. The first subscription to arrive wins.
 	if _, already := seenTenantGraph.LoadOrStore(target.TenantID, true); already {
 		log("info", fmt.Sprintf("Entra/Graph checks already run for tenant %s via another subscription — skipping to avoid duplicate tenant-wide findings", target.TenantID))
 		log("info", "IAM integration checks complete")
@@ -88,27 +75,6 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 	log("info", "checking service principals for dangerous API permissions")
 	if err := checkDangerousAppPermissions(ctx, target, emit, log); err != nil {
 		log("warn", fmt.Sprintf("dangerous API permissions: %v", err))
-	}
-
-	// Cross-tenant access settings.
-	log("info", "checking cross-tenant access policy partners")
-	if err := checkCrossTenantAccess(ctx, target, emit, log); err != nil {
-		log("warn", fmt.Sprintf("cross-tenant access: %v", err))
-	}
-
-	// Federated identity credentials on app registrations.
-	log("info", "checking federated identity credentials on app registrations")
-	if err := checkAppRegistrationFICs(ctx, target, emit, log); err != nil {
-		log("warn", fmt.Sprintf("app registration federated credentials: %v", err))
-	}
-
-	// Dangling OAuth redirect / reply / logout URIs. Severity is scaled by each
-	// app's granted delegated permissions, since a captured redirect response
-	// carries on-behalf-of-the-user tokens.
-	log("info", "checking redirect/reply URIs for dangling hosts")
-	privIndex, _ := buildDelegatedPrivIndex(ctx, target, log)
-	if err := checkDanglingRedirectURIs(ctx, target, emit, log, privIndex); err != nil {
-		log("warn", fmt.Sprintf("dangling redirect URIs: %v", err))
 	}
 
 	log("info", "IAM integration checks complete")
@@ -575,109 +541,4 @@ func buildGraphRoleMap(ctx context.Context, cred azcore.TokenCredential) (map[st
 		roleMap[r.ID] = r.Value
 	}
 	return roleMap, nil
-}
-
-// ---------------------------------------------------------------------------
-// Check 4 — Cross-Tenant Access Settings (Graph API)
-// ---------------------------------------------------------------------------
-
-func checkCrossTenantAccess(ctx context.Context, target creds.SubscriptionTarget,
-	emit func(findings.Finding), log func(string, string)) error {
-
-	const url = "https://graph.microsoft.com/v1.0/policies/crossTenantAccessPolicy/partners"
-	raw, err := graphList(ctx, target.Credential, url)
-	if err != nil {
-		return err
-	}
-
-	log("info", fmt.Sprintf("found %d cross-tenant access policy partners", len(raw)))
-
-	for _, r := range raw {
-		var partner struct {
-			TenantID     string `json:"tenantId"`
-			InboundTrust *struct {
-				IsMFAAccepted                 *bool `json:"isMfaAccepted"`
-				IsCompliantDeviceAccepted     *bool `json:"isCompliantDeviceAccepted"`
-				IsHybridAzureADJoinedAccepted *bool `json:"isHybridAzureADJoinedAccepted"`
-			} `json:"inboundTrust"`
-			B2BCollaborationInbound *struct {
-				Applications *struct {
-					AccessType string `json:"accessType"`
-				} `json:"applications"`
-			} `json:"b2bCollaborationInbound"`
-		}
-		if err := json.Unmarshal(r, &partner); err != nil {
-			continue
-		}
-
-		partnerTenantID := partner.TenantID
-
-		// Check for broad application access — all apps allowed inbound.
-		broadAccess := false
-		if partner.B2BCollaborationInbound != nil &&
-			partner.B2BCollaborationInbound.Applications != nil &&
-			strings.EqualFold(partner.B2BCollaborationInbound.Applications.AccessType, "allowed") {
-			broadAccess = true
-		}
-
-		// Check for inbound trust (accepting MFA/compliance claims from partner).
-		hasInboundTrust := false
-		if partner.InboundTrust != nil {
-			if boolVal(partner.InboundTrust.IsMFAAccepted) ||
-				boolVal(partner.InboundTrust.IsCompliantDeviceAccepted) ||
-				boolVal(partner.InboundTrust.IsHybridAzureADJoinedAccepted) {
-				hasInboundTrust = true
-			}
-		}
-
-		// Every cross-tenant partner is an external trust relationship —
-		// surface all of them. Benign partners (no inbound trust, no broad
-		// app access) become info findings so the analyst can review every
-		// external tenant the directory trusts.
-		sev := findings.SevMedium
-		title := fmt.Sprintf("Cross-tenant inbound trust configured for tenant %s", partnerTenantID)
-
-		switch {
-		case broadAccess && hasInboundTrust:
-			sev = findings.SevHigh
-			title = fmt.Sprintf("Cross-tenant partner %s has inbound trust AND allows all applications", partnerTenantID)
-		case broadAccess:
-			sev = findings.SevHigh
-			title = fmt.Sprintf("Cross-tenant partner %s allows all applications for B2B collaboration", partnerTenantID)
-		case !hasInboundTrust && !broadAccess:
-			sev = findings.SevInfo
-			title = fmt.Sprintf("Cross-tenant partner %s configured (no inbound trust, no broad app access)", partnerTenantID)
-		}
-
-		detail := map[string]any{
-			"tenant_id":         target.TenantID,
-			"partner_tenant_id": partnerTenantID,
-			"has_inbound_trust": hasInboundTrust,
-			"broad_app_access":  broadAccess,
-		}
-		if partner.B2BCollaborationInbound != nil && partner.B2BCollaborationInbound.Applications != nil {
-			detail["b2b_inbound_access_type"] = partner.B2BCollaborationInbound.Applications.AccessType
-		}
-		if partner.InboundTrust != nil {
-			detail["mfa_accepted"] = boolVal(partner.InboundTrust.IsMFAAccepted)
-			detail["compliant_device_accepted"] = boolVal(partner.InboundTrust.IsCompliantDeviceAccepted)
-			detail["hybrid_ad_joined_accepted"] = boolVal(partner.InboundTrust.IsHybridAzureADJoinedAccepted)
-		}
-
-		emit(findings.Finding{
-			Region:     "global",
-			Severity:   sev,
-			ResourceID: fmt.Sprintf("/tenants/%s/policies/crossTenantAccessPolicy/partners/%s", target.TenantID, partnerTenantID),
-			Title:      title,
-			Detail:     detail,
-		})
-	}
-	return nil
-}
-
-func boolVal(b *bool) bool {
-	if b == nil {
-		return false
-	}
-	return *b
 }

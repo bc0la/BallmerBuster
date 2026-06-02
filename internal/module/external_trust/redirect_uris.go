@@ -1,4 +1,4 @@
-package iam_integrations
+package external_trust
 
 import (
 	"context"
