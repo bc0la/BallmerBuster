@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v6"
 
 	"github.com/you/ballmerbuster/internal/creds"
@@ -17,8 +18,10 @@ import (
 
 func init() { module.Register(Module{}) }
 
-// Module scans VMs for secrets in custom data (cloud-init scripts) and
-// custom script extensions.
+// Module scans VMs for secrets in user data / custom data (the Azure
+// equivalents of EC2 user data) and in VM extension settings (CustomScript
+// inline scripts, agent configs, etc.). protectedSettings are write-only and
+// never returned by the API, so only public settings are visible.
 type Module struct{}
 
 func (Module) Name() string      { return "vm_userdata" }
@@ -44,13 +47,6 @@ var secretPatterns = []struct {
 }
 
 var secretKeyPattern = regexp.MustCompile(`(?i)(password|secret|token|api[_-]?key|connection[_-]?string|private[_-]?key|credentials?|account[_-]?key)`)
-
-// scriptExtensionTypes are the extension publisher+type combos we inspect.
-var scriptExtensionTypes = map[string]bool{
-	"customscript":          true,
-	"customscriptextension": true,
-	"customscriptforlinux":  true,
-}
 
 func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink findings.Sink) error {
 	vmClient, err := armcompute.NewVirtualMachinesClient(target.SubscriptionID, target.Credential, nil)
@@ -89,13 +85,15 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 			continue
 		}
 
-		// 2a. Check custom data (base64 encoded cloud-init).
+		// 2a. Check custom data (base64 cloud-init). Note: Azure usually
+		// returns customData as null on read (write-only after create), so
+		// userData below is the reliable source.
 		if vm.Properties.OSProfile != nil {
 			customData := ptrVal(vm.Properties.OSProfile.CustomData)
 			if customData != "" {
 				decoded, err := base64.StdEncoding.DecodeString(customData)
 				if err == nil {
-					scanCustomData(ctx, sink, target.SubscriptionID, location, vmID, vmName, string(decoded))
+					scanScriptText(ctx, sink, target.SubscriptionID, location, vmID, vmName, "custom_data", string(decoded))
 				}
 			}
 
@@ -111,11 +109,29 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 						ResourceID:     vmID,
 						Title:          fmt.Sprintf("Linux VM %s has password authentication enabled", vmName),
 						Detail: map[string]any{
-							"vm_name":                          vmName,
-							"resource_group":                   rg,
-							"disable_password_authentication":  false,
+							"vm_name":                         vmName,
+							"resource_group":                  rg,
+							"disable_password_authentication": false,
 						},
 					})
+				}
+			}
+		}
+
+		// 2a-2. userData — the direct Azure equivalent of EC2 user data. It is
+		// NOT returned by List, so fetch it explicitly with expand=userData.
+		if rg != "" {
+			getResp, gerr := vmClient.Get(ctx, rg, vmName, &armcompute.VirtualMachinesClientGetOptions{
+				Expand: to.Ptr(armcompute.InstanceViewTypesUserData),
+			})
+			if gerr != nil {
+				_ = sink.LogEvent(ctx, "vm_userdata", target.SubscriptionID, "warn",
+					fmt.Sprintf("get userData for %s: %v", vmName, gerr))
+			} else if getResp.Properties != nil {
+				if ud := ptrVal(getResp.Properties.UserData); ud != "" {
+					if decoded, derr := base64.StdEncoding.DecodeString(ud); derr == nil {
+						scanScriptText(ctx, sink, target.SubscriptionID, location, vmID, vmName, "user_data", string(decoded))
+					}
 				}
 			}
 		}
@@ -137,23 +153,19 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 		}
 
 		for _, ext := range extResp.Value {
-			if ext.Properties == nil {
+			if ext.Properties == nil || ext.Properties.Settings == nil {
 				continue
 			}
-
-			extType := strings.ToLower(ptrVal(ext.Properties.Type))
-			if !scriptExtensionTypes[extType] {
-				continue
-			}
-
 			extName := ptrVal(ext.Name)
+			extType := ptrVal(ext.Properties.Type)
 
-			// Check Properties.Settings — marshal to JSON and scan.
-			if ext.Properties.Settings != nil {
-				settingsJSON, err := json.Marshal(ext.Properties.Settings)
-				if err == nil {
-					scanExtensionSettings(ctx, sink, target.SubscriptionID, location, vmID, vmName, extName, string(settingsJSON))
-				}
+			// Scan every extension's public settings — any extension can carry
+			// hardcoded secrets (CustomScript commands/inline scripts, agent
+			// configs, SAS URLs in fileUris, ...). protectedSettings are
+			// write-only and never returned by the API.
+			settingsJSON, err := json.Marshal(ext.Properties.Settings)
+			if err == nil {
+				scanExtensionSettings(ctx, sink, target.SubscriptionID, location, vmID, vmName, extName, extType, string(settingsJSON))
 			}
 		}
 	}
@@ -161,8 +173,10 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 	return nil
 }
 
-// scanCustomData scans decoded custom data for secret patterns.
-func scanCustomData(ctx context.Context, sink findings.Sink, subID, location, vmID, vmName, data string) {
+// scanScriptText scans decoded script/user-data text line-by-line for secret
+// patterns. source labels the origin (custom_data, user_data, an extension
+// script, ...).
+func scanScriptText(ctx context.Context, sink findings.Sink, subID, location, vmID, vmName, source, data string) {
 	lines := strings.Split(data, "\n")
 	for lineNum, line := range lines {
 		if patName := matchSecretPattern(line); patName != "" {
@@ -172,10 +186,10 @@ func scanCustomData(ctx context.Context, sink findings.Sink, subID, location, vm
 				Module:         "vm_userdata",
 				Severity:       findings.SevHigh,
 				ResourceID:     vmID,
-				Title:          fmt.Sprintf("VM %s custom data contains secret at line %d (%s pattern)", vmName, lineNum+1, patName),
+				Title:          fmt.Sprintf("VM %s %s contains secret at line %d (%s pattern)", vmName, source, lineNum+1, patName),
 				Detail: map[string]any{
 					"vm_name":         vmName,
-					"source":          "custom_data",
+					"source":          source,
 					"line_number":     lineNum + 1,
 					"pattern_matched": patName,
 					"content":         line,
@@ -185,8 +199,9 @@ func scanCustomData(ctx context.Context, sink findings.Sink, subID, location, vm
 	}
 }
 
-// scanExtensionSettings scans extension settings JSON for secret patterns.
-func scanExtensionSettings(ctx context.Context, sink findings.Sink, subID, location, vmID, vmName, extName, settingsJSON string) {
+// scanExtensionSettings scans an extension's public settings JSON for secret
+// patterns, decodes any base64 inline script, and flags suspicious keys.
+func scanExtensionSettings(ctx context.Context, sink findings.Sink, subID, location, vmID, vmName, extName, extType, settingsJSON string) {
 	if patName := matchSecretPattern(settingsJSON); patName != "" {
 		_ = sink.Write(ctx, findings.Finding{
 			SubscriptionID: subID,
@@ -194,10 +209,11 @@ func scanExtensionSettings(ctx context.Context, sink findings.Sink, subID, locat
 			Module:         "vm_userdata",
 			Severity:       findings.SevHigh,
 			ResourceID:     vmID,
-			Title:          fmt.Sprintf("VM %s extension %s settings contain secret (%s pattern)", vmName, extName, patName),
+			Title:          fmt.Sprintf("VM %s extension %s (%s) settings contain secret (%s pattern)", vmName, extName, extType, patName),
 			Detail: map[string]any{
 				"vm_name":         vmName,
 				"extension":       extName,
+				"extension_type":  extType,
 				"source":          "extension_settings",
 				"pattern_matched": patName,
 				"content":         settingsJSON,
@@ -205,15 +221,22 @@ func scanExtensionSettings(ctx context.Context, sink findings.Sink, subID, locat
 		})
 	}
 
-	// Also scan for suspicious keys in the JSON structure.
 	var settingsMap map[string]any
 	if err := json.Unmarshal([]byte(settingsJSON), &settingsMap); err == nil {
-		scanMapKeys(ctx, sink, subID, location, vmID, vmName, extName, settingsMap)
+		// CustomScript stores the inline script base64-encoded in "script";
+		// decode and scan its contents (regexes won't match the base64 blob).
+		if s, ok := settingsMap["script"].(string); ok && s != "" {
+			if decoded, err := base64.StdEncoding.DecodeString(s); err == nil {
+				scanScriptText(ctx, sink, subID, location, vmID, vmName,
+					fmt.Sprintf("extension %s inline script", extName), string(decoded))
+			}
+		}
+		scanMapKeys(ctx, sink, subID, location, vmID, vmName, extName, extType, settingsMap)
 	}
 }
 
 // scanMapKeys recursively checks a settings map for keys matching secret patterns.
-func scanMapKeys(ctx context.Context, sink findings.Sink, subID, location, vmID, vmName, extName string, m map[string]any) {
+func scanMapKeys(ctx context.Context, sink findings.Sink, subID, location, vmID, vmName, extName, extType string, m map[string]any) {
 	for key, val := range m {
 		if secretKeyPattern.MatchString(key) {
 			if val != nil {
@@ -227,12 +250,13 @@ func scanMapKeys(ctx context.Context, sink findings.Sink, subID, location, vmID,
 						ResourceID:     vmID,
 						Title:          fmt.Sprintf("VM %s extension %s has suspicious setting key %q", vmName, extName, key),
 						Detail: map[string]any{
-							"vm_name":   vmName,
-							"extension": extName,
-							"source":    "extension_settings",
-							"key":       key,
-							"reason":    "key name matches secret pattern in non-protected settings",
-							"value":     valStr,
+							"vm_name":        vmName,
+							"extension":      extName,
+							"extension_type": extType,
+							"source":         "extension_settings",
+							"key":            key,
+							"reason":         "key name matches secret pattern in non-protected settings",
+							"value":          valStr,
 						},
 					})
 				}
@@ -241,7 +265,7 @@ func scanMapKeys(ctx context.Context, sink findings.Sink, subID, location, vmID,
 
 		// Recurse into nested maps.
 		if nested, ok := val.(map[string]any); ok {
-			scanMapKeys(ctx, sink, subID, location, vmID, vmName, extName, nested)
+			scanMapKeys(ctx, sink, subID, location, vmID, vmName, extName, extType, nested)
 		}
 	}
 }
