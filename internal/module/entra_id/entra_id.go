@@ -196,11 +196,22 @@ func checkOAuth2PermissionGrants(ctx context.Context, target creds.SubscriptionT
 
 	log("info", fmt.Sprintf("found %d OAuth2 permission grants", len(raw)))
 
+	// Resolve service principal object IDs to readable display names. Best
+	// effort — fall back to the raw GUID if the directory can't be listed.
+	spNames, err := buildSPNameIndex(ctx, target.Credential)
+	if err != nil {
+		log("warn", fmt.Sprintf("could not resolve service principal names (findings will show GUIDs): %v", err))
+		spNames = map[string]string{}
+	}
+
 	for _, r := range raw {
 		var grant oauth2PermissionGrant
 		if err := json.Unmarshal(r, &grant); err != nil {
 			continue
 		}
+
+		clientName := spName(spNames, grant.ClientID)
+		resourceName := spName(spNames, grant.ResourceID)
 
 		scopes := strings.Fields(grant.Scope)
 		for _, scope := range scopes {
@@ -221,18 +232,50 @@ func checkOAuth2PermissionGrants(ctx context.Context, target creds.SubscriptionT
 				Region:     "global",
 				Severity:   sev,
 				ResourceID: fmt.Sprintf("/tenants/%s/oauth2PermissionGrants/%s", target.TenantID, grant.ID),
-				Title:      fmt.Sprintf("Dangerous scope %q %s to service principal %s", scope, consentLabel, grant.ClientID),
+				Title:      fmt.Sprintf("Dangerous scope %q on %q %s to %q", scope, resourceName, consentLabel, clientName),
 				Detail: map[string]any{
-					"tenant_id":    target.TenantID,
-					"grant_id":     grant.ID,
-					"client_id":    grant.ClientID,
-					"resource_id":  grant.ResourceID,
-					"consent_type": grant.ConsentType,
-					"scope":        scope,
-					"all_scopes":   grant.Scope,
+					"tenant_id":             target.TenantID,
+					"grant_id":              grant.ID,
+					"client_id":             grant.ClientID,
+					"client_display_name":   clientName,
+					"resource_id":           grant.ResourceID,
+					"resource_display_name": resourceName,
+					"consent_type":          grant.ConsentType,
+					"scope":                 scope,
+					"all_scopes":            grant.Scope,
 				},
 			})
 		}
 	}
 	return nil
+}
+
+// buildSPNameIndex maps service principal objectId -> displayName so findings
+// can show readable names instead of raw GUIDs.
+func buildSPNameIndex(ctx context.Context, cred azcore.TokenCredential) (map[string]string, error) {
+	const url = "https://graph.microsoft.com/v1.0/servicePrincipals?$select=id,displayName"
+	raw, err := graphList(ctx, cred, url)
+	if err != nil {
+		return nil, err
+	}
+	idx := make(map[string]string, len(raw))
+	for _, r := range raw {
+		var sp struct {
+			ID          string `json:"id"`
+			DisplayName string `json:"displayName"`
+		}
+		if err := json.Unmarshal(r, &sp); err == nil && sp.ID != "" {
+			idx[sp.ID] = sp.DisplayName
+		}
+	}
+	return idx, nil
+}
+
+// spName returns the display name for a service principal objectId, falling
+// back to the GUID when it is unknown.
+func spName(idx map[string]string, id string) string {
+	if n, ok := idx[id]; ok && n != "" {
+		return n
+	}
+	return id
 }
