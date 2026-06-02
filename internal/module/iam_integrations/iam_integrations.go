@@ -87,8 +87,11 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 	}
 
 	// 7. Dangling OAuth redirect / reply / logout URIs (Graph API + DNS).
+	// Severity is scaled by each app's granted delegated permissions, since a
+	// captured redirect response carries on-behalf-of-the-user tokens.
 	log("info", "checking redirect/reply URIs for dangling hosts")
-	if err := checkDanglingRedirectURIs(ctx, target, emit, log); err != nil {
+	privIndex, _ := buildDelegatedPrivIndex(ctx, target, log)
+	if err := checkDanglingRedirectURIs(ctx, target, emit, log, privIndex); err != nil {
 		log("warn", fmt.Sprintf("dangling redirect URIs: %v", err))
 	}
 

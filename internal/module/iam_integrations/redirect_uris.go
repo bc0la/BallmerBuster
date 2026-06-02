@@ -48,7 +48,7 @@ type appWithURIs struct {
 }
 
 func checkDanglingRedirectURIs(ctx context.Context, target creds.SubscriptionTarget,
-	emit func(findings.Finding), log func(string, string)) error {
+	emit func(findings.Finding), log func(string, string), priv map[string]delegPriv) error {
 
 	// Per-run DNS cache so repeated hosts are resolved once.
 	type nxResult struct {
@@ -65,7 +65,7 @@ func checkDanglingRedirectURIs(ctx context.Context, target creds.SubscriptionTar
 		return nx, err
 	}
 
-	emitForURI := func(ownerDesc, resourceID string, baseDetail map[string]any, e uriEntry) {
+	emitForURI := func(ownerDesc, resourceID, appID string, baseDetail map[string]any, e uriEntry) {
 		host := redirectHost(e.URI)
 		if host == "" {
 			return
@@ -74,20 +74,36 @@ func checkDanglingRedirectURIs(ctx context.Context, target creds.SubscriptionTar
 		if err != nil || !nx {
 			return // resolves (not dangling) or DNS inconclusive
 		}
-		sev := findings.SevHigh
 		azure := isClaimableAzureHost(host)
-		reason := fmt.Sprintf("redirect/reply target host %q returns NXDOMAIN (dangling); if the host is re-registrable an attacker can receive OAuth authorization codes/tokens sent to %s", host, e.URI)
+
+		// Severity scales with what a captured (delegated) token could do.
+		// Floor at Medium: token capture always impersonates the user to the
+		// app, and a refresh token enables persistence, even with low scopes.
+		dp := priv[appID]
+		sev := redirectSeverity(azure, dp)
+
+		hostNote := fmt.Sprintf("redirect/reply target host %q returns NXDOMAIN (dangling); if the host is re-registrable an attacker can receive OAuth authorization codes/tokens sent to %s", host, e.URI)
 		if azure {
-			sev = findings.SevCritical
-			reason = fmt.Sprintf("redirect/reply target host %q is a native Azure service hostname returning NXDOMAIN — re-registering the freed resource name directly returns control of the host (no asuid verification gate), letting an attacker capture OAuth authorization codes/tokens sent to %s", host, e.URI)
+			hostNote = fmt.Sprintf("redirect/reply target host %q is a native Azure service hostname returning NXDOMAIN — re-registering the freed resource name directly returns control of the host (no asuid verification gate), letting an attacker capture OAuth authorization codes/tokens sent to %s", host, e.URI)
 		}
+		privNote := "app has no dangerous delegated permissions granted, so a captured token is limited — but it still impersonates the user to this application and a refresh token grants persistence"
+		if !dp.Known {
+			privNote = "app's delegated permissions could not be determined (no service principal / grants readable); severity reflects the host only — validate the app's scopes manually"
+		} else if dp.Dangerous {
+			privNote = fmt.Sprintf("app holds dangerous delegated permissions (%s) — a captured token is high-impact", strings.Join(dp.DangerousScopes, ", "))
+		}
+
 		detail := map[string]any{
-			"redirect_uri":      e.URI,
-			"uri_field":         e.Field,
-			"target_host":       host,
-			"host_status":       "NXDOMAIN",
-			"azure_native_host": azure,
-			"reason":            reason,
+			"redirect_uri":         e.URI,
+			"uri_field":            e.Field,
+			"target_host":          host,
+			"host_status":          "NXDOMAIN",
+			"azure_native_host":    azure,
+			"app_privilege_known":  dp.Known,
+			"app_privileged":       dp.Dangerous,
+			"app_dangerous_scopes": dp.DangerousScopes,
+			"app_delegated_scopes": dp.AllScopes,
+			"reason":               hostNote + " | " + privNote,
 		}
 		for k, v := range baseDetail {
 			detail[k] = v
@@ -142,7 +158,7 @@ func checkDanglingRedirectURIs(ctx context.Context, target creds.SubscriptionTar
 			"owner_type":   "application",
 		}
 		for _, e := range entries {
-			emitForURI(ownerDesc, resourceID, base, e)
+			emitForURI(ownerDesc, resourceID, app.AppID, base, e)
 		}
 	}
 
@@ -178,11 +194,28 @@ func checkDanglingRedirectURIs(ctx context.Context, target creds.SubscriptionTar
 			"owner_type":   "servicePrincipal",
 		}
 		for _, u := range sp.ReplyURLs {
-			emitForURI(ownerDesc, resourceID, base, uriEntry{u, "replyUrls"})
+			emitForURI(ownerDesc, resourceID, sp.AppID, base, uriEntry{u, "replyUrls"})
 		}
 	}
 
 	return nil
+}
+
+// redirectSeverity scales the severity of a dangling redirect/reply URI by the
+// host's claimability and what a captured delegated token could do. It never
+// drops below Medium: capturing the OAuth response always impersonates the user
+// to the application and a refresh token grants persistence.
+func redirectSeverity(azureHost bool, dp delegPriv) findings.Severity {
+	switch {
+	case azureHost && dp.Dangerous:
+		return findings.SevCritical
+	case azureHost:
+		return findings.SevHigh // native host fully claimable; impact bounded by limited/unknown scopes
+	case dp.Dangerous:
+		return findings.SevHigh
+	default:
+		return findings.SevMedium
+	}
 }
 
 // redirectHost extracts the hostname from an http/https redirect URI, skipping
