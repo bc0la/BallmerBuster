@@ -188,7 +188,7 @@ func processFIC(ctx context.Context, emit func(findings.Finding), client *http.C
 	}
 
 	// Best-effort takeover / claimability assessment of the trusted external
-	// identity (GitHub org/repo, GitLab group, ...).
+	// subject owner (GitHub org/repo, GitLab group, Terraform Cloud org, ...).
 	takeover := assessFICTakeover(ctx, client, fic.Issuer, fic.Subject)
 	if takeover.Found {
 		detail["external_provider"] = takeover.Principal.Provider
@@ -201,6 +201,9 @@ func processFIC(ctx context.Context, emit func(findings.Finding), client *http.C
 		}
 		detail["claimability"] = takeover.Status
 		detail["claimability_detail"] = takeover.Reason
+		if takeover.RepoNote != "" {
+			detail["repo_note"] = takeover.RepoNote
+		}
 
 		if takeover.Severity != "" && severityRank(takeover.Severity) > severityRank(severity) {
 			severity = takeover.Severity
@@ -209,8 +212,24 @@ func processFIC(ctx context.Context, emit func(findings.Finding), client *http.C
 				ownerDesc, fic.Name, takeover.Principal.Provider, takeover.Principal.Owner)
 		}
 		reason = reason + " | " + takeover.Reason
-		detail["category"] = category
 	}
+
+	// Best-effort claimability of the issuer domain itself. A dangling
+	// self-hosted/custom issuer is the most severe vector: it defeats subject
+	// scoping entirely (attacker hosts their own JWKS and mints any token).
+	if claimable, host, skipped, err := assessIssuerDomain(ctx, fic.Issuer); err == nil && !skipped {
+		detail["issuer_host"] = host
+		detail["issuer_claimable"] = claimable
+		if claimable && severityRank(findings.SevCritical) > severityRank(severity) {
+			severity = findings.SevCritical
+			category = "fed_issuer_takeover"
+			title = fmt.Sprintf("%s federated credential %q — issuer domain %q is claimable (arbitrary token minting)",
+				ownerDesc, fic.Name, host)
+			reason = reason + fmt.Sprintf(" | issuer domain %q returns NXDOMAIN and is claimable; an attacker who registers it can serve a malicious OIDC discovery document + JWKS and mint tokens that satisfy this credential regardless of subject scoping", host)
+		}
+	}
+
+	detail["category"] = category
 	detail["reason"] = reason
 
 	emit(findings.Finding{

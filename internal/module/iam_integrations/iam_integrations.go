@@ -86,6 +86,12 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 		log("warn", fmt.Sprintf("managed identity federated credentials: %v", err))
 	}
 
+	// 7. Dangling OAuth redirect / reply / logout URIs (Graph API + DNS).
+	log("info", "checking redirect/reply URIs for dangling hosts")
+	if err := checkDanglingRedirectURIs(ctx, target, emit, log); err != nil {
+		log("warn", fmt.Sprintf("dangling redirect URIs: %v", err))
+	}
+
 	log("info", "IAM integration checks complete")
 	return nil
 }
