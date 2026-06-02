@@ -1,4 +1,4 @@
-package external_trust
+package redirect_uris
 
 import (
 	"context"

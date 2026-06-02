@@ -28,39 +28,11 @@ import (
 //     issuers, if the issuer hostname's DNS is dangling, an attacker who
 //     registers it can serve a malicious discovery doc + JWKS and mint
 //     arbitrary tokens, defeating subject scoping entirely. (assessIssuerDomain)
-//  3. (Separate file) Dangling OAuth redirect/reply/logout URIs whose host is
-//     claimable — OAuth code/token theft. (redirect_uris.go)
+//  3. Dangling OAuth redirect/reply/logout URIs whose host is claimable —
+//     OAuth code/token theft. (handled by the separate redirect_uris module)
 //
 // All probes are best-effort: inconclusive results are reported for manual
 // validation rather than suppressed.
-
-// claimableAzureSuffixes are native Azure service hostnames that become
-// directly re-registrable (no domain-ownership verification) once the
-// underlying resource is deleted.
-var claimableAzureSuffixes = []string{
-	"azurewebsites.net",
-	"azurefd.net",
-	"azureedge.net",
-	"cloudapp.azure.com",
-	"cloudapp.net",
-	"blob.core.windows.net",
-	"trafficmanager.net",
-	"azurecontainer.io",
-	"azure-api.net",
-	"azurecr.io",
-	"azurehdinsight.net",
-	"azuremicroservices.io",
-}
-
-func isClaimableAzureHost(host string) bool {
-	h := strings.ToLower(strings.TrimSuffix(host, "."))
-	for _, suf := range claimableAzureSuffixes {
-		if h == suf || strings.HasSuffix(h, "."+suf) {
-			return true
-		}
-	}
-	return false
-}
 
 // vendorIssuerSuffixes are OIDC issuer domains owned by a provider and thus
 // never claimable. Everything else is treated as self-hosted/custom and is

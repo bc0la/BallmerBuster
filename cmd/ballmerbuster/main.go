@@ -37,6 +37,7 @@ import (
 	_ "github.com/you/ballmerbuster/internal/module/nsg_exposure"
 	_ "github.com/you/ballmerbuster/internal/module/public_sql"
 	_ "github.com/you/ballmerbuster/internal/module/rbac_review"
+	_ "github.com/you/ballmerbuster/internal/module/redirect_uris"
 	_ "github.com/you/ballmerbuster/internal/module/subdomain_takeover"
 	_ "github.com/you/ballmerbuster/internal/module/vm_userdata"
 )

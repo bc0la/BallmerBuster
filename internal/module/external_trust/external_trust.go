@@ -21,10 +21,10 @@ func init() { module.Register(Module{}) }
 
 // Module surfaces external-trust and federated-credential takeover surface:
 // federated identity credentials (on app registrations and user-assigned
-// managed identities), cross-tenant access policy partners, and dangling
-// OAuth redirect/reply URIs. These are high-volume, manual-review-heavy
-// findings, split out from iam_integrations so they get their own report tab
-// and can be skipped wholesale with --no-external-trust.
+// managed identities) and cross-tenant access policy partners. These are
+// high-volume, manual-review-heavy findings, split out from iam_integrations
+// so they get their own report tab and can be skipped with --no-external-trust.
+// (Dangling OAuth redirect/reply URIs live in the redirect_uris module.)
 type Module struct{}
 
 func (Module) Name() string      { return "external_trust" }
@@ -78,15 +78,6 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 	log("info", "checking cross-tenant access policy partners")
 	if err := checkCrossTenantAccess(ctx, target, emit, log); err != nil {
 		log("warn", fmt.Sprintf("cross-tenant access: %v", err))
-	}
-
-	// Dangling OAuth redirect / reply / logout URIs. Severity is scaled by each
-	// app's granted delegated permissions, since a captured redirect response
-	// carries on-behalf-of-the-user tokens.
-	log("info", "checking redirect/reply URIs for dangling hosts")
-	privIndex, _ := buildDelegatedPrivIndex(ctx, target, log)
-	if err := checkDanglingRedirectURIs(ctx, target, emit, log, privIndex); err != nil {
-		log("warn", fmt.Sprintf("dangling redirect URIs: %v", err))
 	}
 
 	log("info", "external-trust checks complete")
