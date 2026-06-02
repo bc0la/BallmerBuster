@@ -31,6 +31,8 @@ func (Module) Requires() []string {
 	return []string{
 		"Microsoft.Compute/virtualMachines/read",
 		"Microsoft.Authorization/roleAssignments/read",
+		"Microsoft.ManagedIdentity/userAssignedIdentities/read",
+		"Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials/read",
 		"Directory.Read.All",
 		"Application.Read.All",
 	}
@@ -70,6 +72,18 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 	log("info", "checking cross-tenant access policy partners")
 	if err := checkCrossTenantAccess(ctx, target, emit, log); err != nil {
 		log("warn", fmt.Sprintf("cross-tenant access: %v", err))
+	}
+
+	// 5. Federated identity credentials on app registrations (Graph API).
+	log("info", "checking federated identity credentials on app registrations")
+	if err := checkAppRegistrationFICs(ctx, target, emit, log); err != nil {
+		log("warn", fmt.Sprintf("app registration federated credentials: %v", err))
+	}
+
+	// 6. Federated identity credentials on user-assigned managed identities (ARM).
+	log("info", "checking federated identity credentials on managed identities")
+	if err := checkManagedIdentityFICs(ctx, target, emit, log); err != nil {
+		log("warn", fmt.Sprintf("managed identity federated credentials: %v", err))
 	}
 
 	log("info", "IAM integration checks complete")

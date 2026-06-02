@@ -1,4 +1,4 @@
-package entra_id
+package iam_integrations
 
 import (
 	"strings"
