@@ -56,14 +56,15 @@ func main() {
 
 func runCmd(use, short, kind string) *cobra.Command {
 	var (
-		subscription string
+		subscription  string
 		subscriptions []string
-		allSubs      bool
-		mgGroup      string
-		outDir       string
-		engDir       string
-		moduleList   []string
-		noTUI        bool
+		allSubs       bool
+		mgGroup       string
+		outDir        string
+		engDir        string
+		moduleList    []string
+		noTUI         bool
+		noLogicApps   bool
 	)
 	c := &cobra.Command{
 		Use:   use,
@@ -85,7 +86,12 @@ func runCmd(use, short, kind string) *cobra.Command {
 				return fmt.Errorf("no subscriptions detected")
 			}
 
-			modules := selectModules(kind, moduleList)
+			var exclude []string
+			if noLogicApps {
+				exclude = append(exclude, "logic_apps")
+			}
+
+			modules := selectModules(kind, moduleList, exclude)
 			if len(modules) == 0 {
 				return fmt.Errorf("no %s modules to run", kind)
 			}
@@ -110,6 +116,7 @@ func runCmd(use, short, kind string) *cobra.Command {
 			_ = eng.SetMeta(ctx, "opt.management_group", mgGroup)
 			_ = eng.SetMeta(ctx, "opt.kind", kind)
 			_ = eng.SetMeta(ctx, "opt.modules", strings.Join(moduleList, ","))
+			_ = eng.SetMeta(ctx, "opt.exclude", strings.Join(exclude, ","))
 
 			return runEngagement(ctx, eng, targets, modules, nil, noTUI)
 		},
@@ -122,10 +129,11 @@ func runCmd(use, short, kind string) *cobra.Command {
 	c.Flags().StringVar(&engDir, "engagement", "", "Existing engagement dir to append to (default: create new)")
 	c.Flags().StringSliceVar(&moduleList, "modules", nil, "Subset of modules to run (default: all of this kind)")
 	c.Flags().BoolVar(&noTUI, "no-tui", false, "Disable TUI; stream events as text")
+	c.Flags().BoolVar(&noLogicApps, "no-logic-apps", false, "Skip the logic_apps module")
 	return c
 }
 
-func selectModules(kind string, subset []string) []string {
+func selectModules(kind string, subset, exclude []string) []string {
 	all := module.All()
 	allowedKind := func(k module.Kind) bool {
 		switch kind {
@@ -137,20 +145,32 @@ func selectModules(kind string, subset []string) []string {
 			return true
 		}
 	}
+	excluded := make(map[string]bool, len(exclude))
+	for _, e := range exclude {
+		excluded[e] = true
+	}
+
+	var candidates []string
 	if len(subset) > 0 {
-		var out []string
 		for _, name := range subset {
 			if m, ok := module.Get(name); ok && allowedKind(m.Kind()) {
-				out = append(out, name)
+				candidates = append(candidates, name)
 			}
 		}
-		return out
-	}
-	var out []string
-	for _, m := range all {
-		if allowedKind(m.Kind()) {
-			out = append(out, m.Name())
+	} else {
+		for _, m := range all {
+			if allowedKind(m.Kind()) {
+				candidates = append(candidates, m.Name())
+			}
 		}
+	}
+
+	out := make([]string, 0, len(candidates))
+	for _, name := range candidates {
+		if excluded[name] {
+			continue
+		}
+		out = append(out, name)
 	}
 	return out
 }
@@ -271,7 +291,7 @@ func resumeCmd() *cobra.Command {
 				return err
 			}
 
-			modules := selectModules(opts.kind, opts.modules)
+			modules := selectModules(opts.kind, opts.modules, opts.exclude)
 			remaining := 0
 			for _, t := range targets {
 				for _, name := range modules {
@@ -298,6 +318,7 @@ type scanOpts struct {
 	cred    creds.Options
 	kind    string
 	modules []string
+	exclude []string
 }
 
 func readScanOpts(ctx context.Context, eng *engagement.Engagement) (scanOpts, error) {
@@ -315,6 +336,9 @@ func readScanOpts(ctx context.Context, eng *engagement.Engagement) (scanOpts, er
 	out.kind = get("opt.kind")
 	if v := get("opt.modules"); v != "" {
 		out.modules = strings.Split(v, ",")
+	}
+	if v := get("opt.exclude"); v != "" {
+		out.exclude = strings.Split(v, ",")
 	}
 	return out, nil
 }
