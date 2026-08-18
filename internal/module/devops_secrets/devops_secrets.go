@@ -264,6 +264,7 @@ func scanVariables(
 				Title: fmt.Sprintf("DevOps %s/%s variable %q in %q matches secret pattern (%s)",
 					orgName, projectName, varName, sourceName, patName),
 				Detail: map[string]any{
+					"check":           "secret_pattern",
 					"organization":    orgName,
 					"project":         projectName,
 					"source":          sourceName,
@@ -287,6 +288,7 @@ func scanVariables(
 				Title: fmt.Sprintf("DevOps %s/%s variable %q in %q has suspicious name (plaintext, not marked secret)",
 					orgName, projectName, varName, sourceName),
 				Detail: map[string]any{
+					"check":         "suspicious_name",
 					"organization":  orgName,
 					"project":       projectName,
 					"source":        sourceName,

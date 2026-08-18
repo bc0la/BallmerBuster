@@ -109,6 +109,7 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 						ResourceID:     vmID,
 						Title:          fmt.Sprintf("Linux VM %s has password authentication enabled", vmName),
 						Detail: map[string]any{
+							"check":                           "password_auth",
 							"vm_name":                         vmName,
 							"resource_group":                  rg,
 							"disable_password_authentication": false,
@@ -188,6 +189,7 @@ func scanScriptText(ctx context.Context, sink findings.Sink, subID, location, vm
 				ResourceID:     vmID,
 				Title:          fmt.Sprintf("VM %s %s contains secret at line %d (%s pattern)", vmName, source, lineNum+1, patName),
 				Detail: map[string]any{
+					"check":           "secret_pattern",
 					"vm_name":         vmName,
 					"source":          source,
 					"line_number":     lineNum + 1,
@@ -211,6 +213,7 @@ func scanExtensionSettings(ctx context.Context, sink findings.Sink, subID, locat
 			ResourceID:     vmID,
 			Title:          fmt.Sprintf("VM %s extension %s (%s) settings contain secret (%s pattern)", vmName, extName, extType, patName),
 			Detail: map[string]any{
+				"check":           "secret_pattern",
 				"vm_name":         vmName,
 				"extension":       extName,
 				"extension_type":  extType,
@@ -250,6 +253,7 @@ func scanMapKeys(ctx context.Context, sink findings.Sink, subID, location, vmID,
 						ResourceID:     vmID,
 						Title:          fmt.Sprintf("VM %s extension %s has suspicious setting key %q", vmName, extName, key),
 						Detail: map[string]any{
+							"check":          "suspicious_name",
 							"vm_name":        vmName,
 							"extension":      extName,
 							"extension_type": extType,

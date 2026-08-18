@@ -7,10 +7,28 @@
   :root { color-scheme: dark; }
   body { font: 14px/1.4 system-ui, sans-serif; margin: 0; background: #111; color: #eee; }
   header { padding: 16px 24px; border-bottom: 1px solid #333; background: #181818; }
-  header h1 { margin: 0 0 8px; font-size: 18px; }
-  nav { display: flex; flex-wrap: wrap; gap: 4px; }
-  nav button { background: #222; color: #eee; border: 1px solid #333; padding: 6px 12px; cursor: pointer; font: inherit; }
-  nav button.active { background: #2a4d69; border-color: #3a6d99; }
+  header h1 { margin: 0 0 10px; font-size: 18px; }
+  nav.sections { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  nav.sections button { background: #1d1d1d; color: #ddd; border: 1px solid #333; padding: 7px 14px; cursor: pointer; font: inherit; font-weight: 600; border-radius: 4px; }
+  nav.sections button.active { background: #2a4d69; border-color: #3a6d99; color: #fff; }
+  nav.sections button.fp { color: #c9a; }
+  nav.sections button.fp.active { background: #5a2a4d; border-color: #8a3a6d; color: #fff; }
+  nav.sections .count { opacity: .7; font-weight: 400; margin-left: 4px; }
+  nav.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  nav.chips button { background: #191919; color: #bbb; border: 1px solid #2a2a2a; padding: 4px 10px; cursor: pointer; font: inherit; font-size: 12px; border-radius: 12px; }
+  nav.chips button.active { background: #24425a; border-color: #3a6d99; color: #fff; }
+  nav.chips .count { opacity: .6; margin-left: 3px; }
+  nav.chips:empty { display: none; }
+  nav.checkbar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-bottom: 8px; }
+  nav.checkbar:empty { display: none; }
+  nav.checkbar .checkbar-label { color: #888; font-size: 12px; margin-right: 2px; }
+  nav.checkbar button { background: #16221a; color: #9cc; border: 1px solid #244; padding: 3px 9px; cursor: pointer; font: inherit; font-size: 12px; border-radius: 12px; }
+  nav.checkbar button.off { background: #1a1a1a; color: #666; border-color: #333; text-decoration: line-through; }
+  nav.checkbar button .count { opacity: .6; margin-left: 3px; }
+  nav.checkbar .checkbar-clear { background: #333; color: #ccc; border: 1px solid #555; text-decoration: none; border-radius: 4px; }
+  nav.checkbar .checkbar-clear:hover { background: #555; }
+  #utils h2 { font-size: 16px; margin: 4px 0 8px; }
+  .muted { color: #888; }
   main { padding: 16px 24px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
   th, td { padding: 6px 8px; border-bottom: 1px solid #222; text-align: left; vertical-align: top; overflow: hidden; text-overflow: ellipsis; }
@@ -18,12 +36,18 @@
   th .resizer { position: absolute; right: 0; top: 0; width: 5px; height: 100%; cursor: col-resize; background: transparent; }
   th .resizer:hover, th .resizer.active { background: #3a6d99; }
   tr:hover { background: #1a1a1a; }
-  tr.hidden-row { display: none; }
   .sev-critical { color: #ff5b5b; font-weight: bold; }
   .sev-high     { color: #ff9a3c; font-weight: bold; }
   .sev-medium   { color: #ffd166; }
   .sev-low      { color: #99d98c; }
   .sev-info     { color: #7f8bd6; }
+  /* Potential-severity rating dot stamped on section/module/check filters. */
+  .rating { margin-right: 4px; font-size: 9px; vertical-align: middle; }
+  .rating-critical { color: #ff5b5b; }
+  .rating-high     { color: #ff9a3c; }
+  .rating-medium   { color: #ffd166; }
+  .rating-low      { color: #99d98c; }
+  .rating-info     { color: #7f8bd6; }
   details { margin: 0; }
   pre { white-space: pre-wrap; word-break: break-word; background: #0c0c0c; padding: 8px; border: 1px solid #222; max-height: 400px; overflow: auto; }
   .summary { display: flex; gap: 24px; margin-bottom: 16px; flex-wrap: wrap; }
@@ -38,106 +62,277 @@
   .toolbar .btn:hover { background: #3a6d99; }
   .toolbar .btn-warn { background: #693a2a; border-color: #994d3a; }
   .toolbar .btn-warn:hover { background: #994d3a; }
-  .hide-btn { background: #333; color: #999; border: 1px solid #555; padding: 1px 6px; cursor: pointer; font-size: 11px; margin-left: 4px; }
-  .hide-btn:hover { background: #555; color: #eee; }
-  .hidden-count { color: #777; font-size: 12px; margin-left: 8px; }
+  .hide-btn { background: #333; color: #999; border: 1px solid #555; padding: 1px 6px; cursor: pointer; font-size: 11px; }
+  .hide-btn:hover { background: #994d3a; color: #fff; border-color: #994d3a; }
+  .restore-btn { background: #2a5a3a; color: #cfe; border: 1px solid #3a7d5a; padding: 1px 6px; cursor: pointer; font-size: 11px; }
+  .restore-btn:hover { background: #3a7d5a; color: #fff; }
 </style>
 </head>
 <body>
 <header>
   <h1>BallmerBuster report</h1>
-  <nav id="tabs"></nav>
+  <nav class="sections" id="sections"></nav>
+  <nav class="chips" id="chips"></nav>
 </header>
 <main>
   <div class="summary" id="summary"></div>
-  <div class="toolbar">
+  <div class="toolbar" id="toolbar">
     <input type="search" id="filter" placeholder="filter...">
     <button class="btn" id="export-curls" onclick="exportCurls()" style="display:none">Export curls</button>
     <button class="btn" id="export-raw" onclick="exportRaw()" style="display:none">Export JSON</button>
     <button class="btn" id="export-assets" onclick="exportAssets()" style="display:none">Export assets</button>
-    <button class="btn btn-warn" id="restore-hidden" onclick="restoreHidden()" style="display:none">Restore hidden</button>
-    <span class="hidden-count" id="hidden-count"></span>
+    <button class="btn btn-warn" id="restore-all" onclick="restoreAll()" style="display:none">Restore all false positives</button>
   </div>
+  <nav class="checkbar" id="checkfilter"></nav>
   <div id="content"></div>
 </main>
 <script>
-let currentModule = "";
+// ---- State ---------------------------------------------------------------
+// All findings are loaded ONCE and every count/filter is computed client-side.
+// This keeps tab switching a pure in-memory operation (snappy) and guarantees
+// the tab counts always agree with the rows shown — including after findings
+// are marked as false positives.
 let allFindings = [];
+let categories = [];            // [{key,label}] from /api/summary
+const moduleCategory = {};      // module name -> category key
+const moduleRating = {};        // module name -> potential-severity rating
 
+// Potential-severity rating helpers. Each filter (section / module / check) is
+// stamped with a coloured dot for the worst-case severity it can surface.
+const RATING_RANK = { critical: 4, high: 3, medium: 2, low: 1, info: 0 };
+function ratingOf(mod) { return moduleRating[mod] || 'medium'; }
+function maxRating(mods) {
+  let best = 'info';
+  for (const m of mods) {
+    if ((RATING_RANK[ratingOf(m)] || 0) > (RATING_RANK[best] || 0)) best = ratingOf(m);
+  }
+  return best;
+}
+function ratingDot(rating) {
+  return '<span class="rating rating-' + rating + '" title="potential severity: ' + rating + '">●</span>';
+}
+let currentSection = '';        // '' = All | category key | '__fp__' = false positives
+let currentModule = '';         // '' = all modules in section
+// Check-type facets the user has toggled off. A "check" is the sub-check within
+// a module (e.g. a secret-pattern hit vs a suspicious-key-name warning).
+// Session-only, and applied in every view including False Positives.
+const excludedChecks = new Set();
+
+const FP_SECTION = '__fp__';
+
+// checkKey derives a stable sub-check label for a finding. Modules that emit
+// several distinct checks tag them in detail.category / detail.kind / etc.;
+// single-check modules fall back to the module name.
+function checkKey(f) {
+  const d = f.detail || {};
+  return d.category || d.kind || d.check || d.subtype || f.module;
+}
+
+// checkLabel prettifies a check key for display without changing the key itself
+// (the raw key is what excludedChecks / exports match on). Azure secrets modules
+// tag their findings with a small set of shared check keys so the filter bar can
+// split "pattern hits" from "suspicious names" from posture findings.
+// The native secrets modules tag hits with the keys below; the kingfisher-based
+// secrets_scan module tags its hits "kf:<sourcetype>" — render those as readable,
+// clearly kingfisher-attributed labels so the two stay visually distinct.
+const CHECK_LABELS = {
+  'secret_pattern':     'Secret pattern match',
+  'suspicious_name':    'Suspicious key name',
+  'public_ip':          'Public IP exposure',
+  'password_auth':      'Password auth enabled',
+  'open_trigger':       'Unauthenticated trigger',
+  'stored_credentials': 'Stored credentials',
+  'cloud_connection':   'Cloud provider connection',
+  'kf:vm_userdata':        'VM user data (kingfisher)',
+  'kf:vm_ext':             'VM extension settings (kingfisher)',
+  'kf:vmss_userdata':      'Scale Set user data (kingfisher)',
+  'kf:vmss_ext':           'Scale Set extension settings (kingfisher)',
+  'kf:appservice_env':     'App Service settings (kingfisher)',
+  'kf:appservice_connstr': 'App Service connection strings (kingfisher)',
+  'kf:appservice_code':    'App Service code (kingfisher)',
+  'kf:aci_env':            'Container Instance env (kingfisher)',
+  'kf:arm_deploy':         'ARM deployment params (kingfisher)',
+  'kf:deploy_script':      'Deployment Scripts (kingfisher)',
+  'kf:automation_var':     'Automation variables (kingfisher)',
+  'kf:automation_runbook': 'Automation runbooks (kingfisher)',
+  'kf:automation_job':     'Automation job output (kingfisher)',
+  'kf:logic_app':          'Logic App definition (kingfisher)',
+  'kf:appconfig':          'App Configuration (kingfisher)',
+  'kf:apim_named_value':   'APIM named values (kingfisher)',
+  'kf:log_analytics':      'Log Analytics records (kingfisher)',
+  'kf:blob':               'Blob Storage contents (kingfisher)',
+};
+function checkLabel(k) {
+  if (CHECK_LABELS[k]) return CHECK_LABELS[k];
+  if (k && k.indexOf('kf:') === 0) return k.slice(3).replace(/_/g, ' ') + ' (kingfisher)';
+  return k;
+}
+
+// ---- False positives (client-side, per analyst) --------------------------
+// Stored in localStorage keyed by finding ID. "Hiding" a finding moves it into
+// the False Positives section rather than deleting it, so accidental removals
+// are one Restore click away.
 const HIDDEN_KEY = 'bb_hidden_findings';
-function getHidden() {
+function getFP() {
   try { return JSON.parse(localStorage.getItem(HIDDEN_KEY) || '{}'); } catch { return {}; }
 }
-function setHidden(h) { localStorage.setItem(HIDDEN_KEY, JSON.stringify(h)); }
-function hideFinding(id) {
-  const h = getHidden(); h[id] = true; setHidden(h);
-  const row = document.getElementById('row-' + id);
-  if (row) row.classList.add('hidden-row');
-  updateHiddenUI();
+function setFP(h) { localStorage.setItem(HIDDEN_KEY, JSON.stringify(h)); }
+function isFP(f) { return !!getFP()[f.id]; }
+function markFP(id) { const h = getFP(); h[id] = true; setFP(h); renderAll(); }
+function unmarkFP(id) { const h = getFP(); delete h[id]; setFP(h); renderAll(); }
+function restoreAll() {
+  const h = getFP();
+  // Only restore the false positives that are currently in view.
+  for (const f of rowsForSection(currentSection, currentModule, true)) delete h[f.id];
+  setFP(h);
+  renderAll();
 }
-function restoreHidden() {
-  if (!currentModule) { const h = getHidden(); for (const k in h) delete h[k]; setHidden(h); }
-  else {
-    const h = getHidden();
-    for (const f of allFindings) { if (f.module === currentModule || !currentModule) delete h[f.id]; }
-    setHidden(h);
+
+// ---- Selection & filtering ----------------------------------------------
+function categoryOf(f) { return moduleCategory[f.module] || 'other'; }
+
+// rowsForSection returns findings for a section/module selection, before the
+// text filter. When forceFP is true it returns the false-positive set for the
+// same section/module regardless of currentSection.
+function rowsForSection(section, mod, forceFP) {
+  const fp = getFP();
+  const wantFP = forceFP || section === FP_SECTION;
+  let rows = allFindings.filter(f => (!!fp[f.id]) === wantFP);
+  if (section && section !== FP_SECTION) rows = rows.filter(f => categoryOf(f) === section);
+  if (mod) rows = rows.filter(f => f.module === mod);
+  return rows;
+}
+
+// applyCheckFilter drops findings whose check the user has toggled off.
+function applyCheckFilter(rows) {
+  if (excludedChecks.size === 0) return rows;
+  return rows.filter(f => !excludedChecks.has(f._check));
+}
+
+function currentRows() {
+  const base = applyCheckFilter(rowsForSection(currentSection, currentModule, false));
+  const filter = document.getElementById('filter').value.toLowerCase();
+  return filter ? base.filter(f => f._search.includes(filter)) : base;
+}
+
+// ---- Nav rendering -------------------------------------------------------
+function renderNav() {
+  const fp = getFP();
+  const nonFP = allFindings.filter(f => !fp[f.id]);
+  const fpCount = allFindings.length - nonFP.length;
+
+  const allMods = Object.keys(moduleRating);
+  const modsInCat = k => allMods.filter(m => moduleCategory[m] === k);
+
+  const sections = document.getElementById('sections');
+  sections.innerHTML = '';
+  const mkSection = (key, label, count, isFp, rating) => {
+    const b = document.createElement('button');
+    if (isFp) b.className = 'fp';
+    if (key === currentSection) b.classList.add('active');
+    b.innerHTML = (rating ? ratingDot(rating) : '') + label + '<span class="count">' + count + '</span>';
+    b.onclick = () => { currentSection = key; currentModule = ''; renderAll(); };
+    sections.appendChild(b);
+  };
+  mkSection('', 'All', nonFP.length, false, maxRating(allMods));
+  for (const c of categories) {
+    mkSection(c.key, c.label, nonFP.filter(f => categoryOf(f) === c.key).length, false, maxRating(modsInCat(c.key)));
   }
-  render();
-}
-function updateHiddenUI() {
-  const h = getHidden();
-  const relevant = allFindings.filter(f => h[f.id]);
-  const countEl = document.getElementById('hidden-count');
-  const restoreEl = document.getElementById('restore-hidden');
-  if (relevant.length > 0) {
-    countEl.textContent = relevant.length + ' hidden';
-    restoreEl.style.display = '';
-  } else {
-    countEl.textContent = '';
-    restoreEl.style.display = 'none';
+  // False Positives rating reflects the worst module actually parked there.
+  const fpMods = [...new Set(allFindings.filter(f => fp[f.id]).map(f => f.module))];
+  mkSection(FP_SECTION, 'False Positives', fpCount, true, fpMods.length ? maxRating(fpMods) : '');
+
+  // Module chips: only for a concrete category section (All / FP show none).
+  const chips = document.getElementById('chips');
+  chips.innerHTML = '';
+  if (currentSection && currentSection !== FP_SECTION) {
+    const mods = Object.keys(moduleCategory)
+      .filter(m => moduleCategory[m] === currentSection)
+      .sort();
+    const mkChip = (mod, label, count, rating) => {
+      const b = document.createElement('button');
+      if (mod === currentModule) b.classList.add('active');
+      b.innerHTML = (rating ? ratingDot(rating) : '') + label + '<span class="count">' + count + '</span>';
+      b.onclick = () => { currentModule = mod; renderAll(); };
+      chips.appendChild(b);
+    };
+    mkChip('', 'all', nonFP.filter(f => categoryOf(f) === currentSection).length, maxRating(modsInCat(currentSection)));
+    for (const m of mods) mkChip(m, m, nonFP.filter(f => f.module === m).length, ratingOf(m));
   }
 }
 
-async function loadSummary() {
-  const r = await fetch('/api/summary').then(r => r.json());
-  const tabs = document.getElementById('tabs');
-  tabs.innerHTML = '';
-  const mkBtn = (label, mod) => {
-    const b = document.createElement('button');
-    b.textContent = label;
-    b.onclick = () => { currentModule = mod; loadFindings(); renderTabs(); };
-    if (mod === currentModule) b.classList.add('active');
-    return b;
-  };
-  tabs.appendChild(mkBtn('All', ''));
-  (r.modules || []).forEach(m => tabs.appendChild(mkBtn(`${m.module} (${m.count})`, m.module)));
+// ---- Summary + toolbar ---------------------------------------------------
+function renderSummary() {
+  // Severity counts reflect the current section/module and check filter
+  // (excluding the text filter so numbers stay stable while typing).
+  const base = applyCheckFilter(rowsForSection(currentSection, currentModule, false));
+  const bySev = {};
+  for (const f of base) bySev[f.severity] = (bySev[f.severity] || 0) + 1;
+  const order = ['critical', 'high', 'medium', 'low', 'info'];
   const s = document.getElementById('summary');
   s.innerHTML = '';
-  Object.entries(r.severity || {}).forEach(([k, v]) => {
+  order.filter(k => bySev[k]).forEach(k => {
     const d = document.createElement('div');
     d.className = 'sev-' + k;
-    d.textContent = `${k}: ${v}`;
+    d.textContent = k + ': ' + bySev[k];
     s.appendChild(d);
   });
 }
 
-function renderTabs() {
-  document.querySelectorAll('#tabs button').forEach(b => {
-    b.classList.toggle('active', (b.textContent.startsWith('All') ? '' : b.textContent.split(' ')[0]) === currentModule);
-  });
+// renderCheckFilter draws the per-check toggle bar for the current view. It is
+// shown in every section and in False Positives, and only when the view holds
+// more than one distinct check (otherwise there is nothing to split).
+function renderCheckFilter() {
+  const base = rowsForSection(currentSection, currentModule, false);
+  const counts = {};
+  const checkMods = {}; // check key -> set of modules that emit it (for the rating)
+  for (const f of base) {
+    counts[f._check] = (counts[f._check] || 0) + 1;
+    (checkMods[f._check] = checkMods[f._check] || new Set()).add(f.module);
+  }
+  const keys = Object.keys(counts).sort();
+  const bar = document.getElementById('checkfilter');
+  bar.innerHTML = '';
+  if (keys.length <= 1) return;
+
+  const label = document.createElement('span');
+  label.className = 'checkbar-label';
+  label.textContent = 'checks:';
+  bar.appendChild(label);
+
+  for (const k of keys) {
+    const b = document.createElement('button');
+    if (excludedChecks.has(k)) b.classList.add('off');
+    b.innerHTML = ratingDot(maxRating([...checkMods[k]])) + checkLabel(k) + '<span class="count">' + counts[k] + '</span>';
+    b.title = (excludedChecks.has(k) ? 'Click to show' : 'Click to hide') + ' — ' + k;
+    b.onclick = () => {
+      if (excludedChecks.has(k)) excludedChecks.delete(k); else excludedChecks.add(k);
+      renderAll();
+    };
+    bar.appendChild(b);
+  }
+  if (keys.some(k => excludedChecks.has(k))) {
+    const clr = document.createElement('button');
+    clr.className = 'checkbar-clear';
+    clr.textContent = 'reset';
+    clr.onclick = () => { excludedChecks.clear(); renderAll(); };
+    bar.appendChild(clr);
+  }
 }
 
-async function loadFindings() {
-  currentTable = null;
-  const qs = currentModule ? `?module=${encodeURIComponent(currentModule)}` : '';
-  allFindings = await fetch('/api/findings' + qs).then(r => r.json()) || [];
-  const hasCurls = allFindings.some(f => f.detail && f.detail.curl);
-  document.getElementById('export-curls').style.display = hasCurls ? '' : 'none';
-  document.getElementById('export-raw').style.display = '';
-  document.getElementById('export-assets').style.display = '';
-  render();
+function renderToolbar() {
+  const fpView = currentSection === FP_SECTION;
+  const show = (id, on) => document.getElementById(id).style.display = on ? '' : 'none';
+  show('restore-all', fpView);
+  show('export-raw', !fpView);
+  show('export-assets', !fpView);
+  // Curls only exist for a few modules (e.g. blob_anon); offer the export only
+  // when the current view actually contains curl-bearing findings.
+  const curlish = !fpView && currentRows().some(f => f.detail && f.detail.curl);
+  show('export-curls', curlish);
 }
 
+// ---- Table (persistent column widths survive re-renders) -----------------
 const colDefs = [
   {name: '', width: 30},
   {name: 'severity', width: 80},
@@ -164,8 +359,11 @@ function buildTableHeader() {
     headerRow.appendChild(th);
     return th;
   });
+  // Attach resizers in a second pass so each one knows its right-hand neighbor.
+  // Dragging the resizer between column ci and ci+1 grows ci and shrinks ci+1
+  // by the same amount, keeping the total table width constant.
   ths.forEach((th, ci) => {
-    if (ci >= ths.length - 1) return;
+    if (ci >= ths.length - 1) return; // last column has no right neighbor
     const rightTh = ths[ci + 1];
     const resizer = document.createElement('div');
     resizer.className = 'resizer';
@@ -202,13 +400,15 @@ function buildTableHeader() {
   return tbl;
 }
 
-function render() {
-  const filter = document.getElementById('filter').value.toLowerCase();
-  const hidden = getHidden();
-  const rows = allFindings.filter(f => !filter || JSON.stringify(f).toLowerCase().includes(filter));
+function renderTable() {
+  const fpView = currentSection === FP_SECTION;
+  const rows = currentRows();
   const content = document.getElementById('content');
-  if (rows.length === 0) { content.textContent = 'no findings'; currentTable = null; updateHiddenUI(); return; }
-
+  if (rows.length === 0) {
+    content.textContent = fpView ? 'no false positives' : 'no findings';
+    currentTable = null;
+    return;
+  }
   if (!currentTable || !content.contains(currentTable)) {
     currentTable = buildTableHeader();
     content.innerHTML = '';
@@ -222,35 +422,37 @@ function render() {
   for (const f of rows) {
     const tr = document.createElement('tr');
     tr.id = 'row-' + f.id;
-    if (hidden[f.id]) tr.classList.add('hidden-row');
 
-    // Hide button.
-    const hideCell = document.createElement('td');
-    const hideBtn = document.createElement('button');
-    hideBtn.className = 'hide-btn';
-    hideBtn.textContent = 'x';
-    hideBtn.title = 'Hide this finding';
-    hideBtn.onclick = () => hideFinding(f.id);
-    hideCell.appendChild(hideBtn);
-    tr.appendChild(hideCell);
+    // Hide (→ false positive) or Restore button.
+    const actCell = document.createElement('td');
+    const actBtn = document.createElement('button');
+    if (fpView) {
+      actBtn.className = 'restore-btn';
+      actBtn.textContent = '↺';
+      actBtn.title = 'Restore this finding';
+      actBtn.onclick = () => unmarkFP(f.id);
+    } else {
+      actBtn.className = 'hide-btn';
+      actBtn.textContent = 'x';
+      actBtn.title = 'Mark as false positive';
+      actBtn.onclick = () => markFP(f.id);
+    }
+    actCell.appendChild(actBtn);
+    tr.appendChild(actCell);
 
-    // Severity.
     const sevCell = document.createElement('td');
     sevCell.className = 'sev-' + f.severity;
     sevCell.textContent = f.severity;
     tr.appendChild(sevCell);
 
-    // Subscription.
     const subCell = document.createElement('td');
     subCell.textContent = f.subscription_id;
     tr.appendChild(subCell);
 
-    // Region.
     const regCell = document.createElement('td');
     regCell.textContent = f.region;
     tr.appendChild(regCell);
 
-    // Module.
     const modCell = document.createElement('td');
     modCell.textContent = f.module;
     tr.appendChild(modCell);
@@ -275,12 +477,10 @@ function render() {
     }
     tr.appendChild(titleCell);
 
-    // Resource.
     const resCell = document.createElement('td');
     resCell.textContent = f.resource_id || '';
     tr.appendChild(resCell);
 
-    // Raw.
     const rawCell = document.createElement('td');
     if (f.raw_output_path) {
       const a = document.createElement('a');
@@ -291,7 +491,6 @@ function render() {
     }
     tr.appendChild(rawCell);
 
-    // Detail.
     const detCell = document.createElement('td');
     const det = document.createElement('details');
     const sum = document.createElement('summary');
@@ -307,14 +506,31 @@ function render() {
   }
   tbody.appendChild(frag);
   currentTable.appendChild(tbody);
-  updateHiddenUI();
+}
+
+// renderAll re-renders nav + summary + toolbar + table from in-memory state.
+function renderAll() {
+  currentTable = null; // section/module changed: rebuild header cleanly
+  renderNav();
+  renderCheckFilter();
+  renderSummary();
+  renderToolbar();
+  renderTable();
+}
+
+// ---- Exports (operate on what's actually shown: current section/module,
+// minus false positives, minus checks toggled off, minus the text filter) ----
+function visibleForExport() {
+  const section = currentSection === FP_SECTION ? '' : currentSection;
+  let rows = applyCheckFilter(rowsForSection(section, currentModule, false));
+  const filter = document.getElementById('filter').value.toLowerCase();
+  if (filter) rows = rows.filter(f => f._search.includes(filter));
+  return rows;
 }
 
 function exportCurls() {
   const lines = [];
-  const hidden = getHidden();
-  for (const f of allFindings) {
-    if (hidden[f.id]) continue;
+  for (const f of visibleForExport()) {
     if (!f.detail || !f.detail.curl) continue;
     const curls = Array.isArray(f.detail.curl) ? f.detail.curl : [f.detail.curl];
     lines.push('# ' + f.title + ' [' + f.severity + '] ' + f.subscription_id + ' ' + f.region);
@@ -322,30 +538,18 @@ function exportCurls() {
     lines.push('');
   }
   if (lines.length === 0) { alert('No curl commands found in visible findings.'); return; }
-  const blob = new Blob([lines.join('\n')], {type: 'text/plain'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'ballmerbuster-curls.txt';
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadText(lines.join('\n'), 'ballmerbuster-curls.txt');
 }
 
 function exportRaw() {
-  const hidden = getHidden();
-  const data = allFindings.filter(f => !hidden[f.id]);
+  const data = visibleForExport();
   if (data.length === 0) { alert('No visible findings to export.'); return; }
-  const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = 'ballmerbuster-' + (currentModule || 'all') + '.json';
-  a.click();
-  URL.revokeObjectURL(a.href);
+  downloadText(JSON.stringify(data, null, 2), 'ballmerbuster-' + (currentModule || currentSection || 'all') + '.json', 'application/json');
 }
 
 function extractAsset(f) {
   const d = f.detail || {};
-  const mod = f.module;
-  switch (mod) {
+  switch (f.module) {
     case 'blob_anon':
       if (d.list_curl) return d.list_curl;
       if (d.curl) {
@@ -376,32 +580,55 @@ function extractAsset(f) {
 }
 
 function exportAssets() {
-  const hidden = getHidden();
   const seen = new Set();
   const lines = [];
-  for (const f of allFindings) {
-    if (hidden[f.id]) continue;
+  for (const f of visibleForExport()) {
     const asset = extractAsset(f);
     if (!asset) continue;
     for (const line of asset.split('\n')) {
       const trimmed = line.trim();
-      if (trimmed && !seen.has(trimmed)) {
-        seen.add(trimmed);
-        lines.push(trimmed);
-      }
+      if (trimmed && !seen.has(trimmed)) { seen.add(trimmed); lines.push(trimmed); }
     }
   }
   if (lines.length === 0) { alert('No assets found in visible findings.'); return; }
-  const blob = new Blob([lines.join('\n') + '\n'], {type: 'text/plain'});
+  downloadText(lines.join('\n') + '\n', 'ballmerbuster-' + (currentModule || currentSection || 'all') + '-assets.txt');
+}
+
+function downloadText(text, name, type) {
+  const blob = new Blob([text], {type: type || 'text/plain'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = 'ballmerbuster-' + (currentModule || 'all') + '-assets.txt';
+  a.download = name;
   a.click();
   URL.revokeObjectURL(a.href);
 }
 
-document.getElementById('filter').addEventListener('input', render);
-loadSummary().then(loadFindings);
+// ---- Boot ----------------------------------------------------------------
+// Debounce the text filter so typing only rebuilds the table body once the
+// user pauses, keeping keystrokes responsive on large finding sets.
+let filterTimer = null;
+document.getElementById('filter').addEventListener('input', () => {
+  clearTimeout(filterTimer);
+  filterTimer = setTimeout(() => { currentTable = null; renderTable(); renderSummary(); renderToolbar(); }, 120);
+});
+
+async function boot() {
+  const summary = await fetch('/api/summary').then(r => r.json());
+  categories = summary.categories || [];
+  for (const m of (summary.modules || [])) {
+    moduleCategory[m.module] = m.category || 'other';
+    moduleRating[m.module] = m.rating || 'medium';
+  }
+  allFindings = await fetch('/api/findings').then(r => r.json()) || [];
+  // Precompute a lowercase search blob per finding so the text filter never
+  // re-stringifies on every keystroke.
+  for (const f of allFindings) {
+    f._search = JSON.stringify(f).toLowerCase();
+    f._check = checkKey(f);
+  }
+  renderAll();
+}
+boot();
 </script>
 </body>
 </html>

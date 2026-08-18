@@ -83,6 +83,7 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 					ResourceID:     cgID,
 					Title:          fmt.Sprintf("Container group %s has a public IP address", cgName),
 					Detail: map[string]any{
+						"check":           "public_ip",
 						"container_group": cgName,
 						"ip_type":         "Public",
 						"ip_address":      ptrVal(cg.Properties.IPAddress.IP),
@@ -138,6 +139,7 @@ func scanEnvVars(ctx context.Context, sink findings.Sink, subID, location, cgID,
 				ResourceID:     cgID,
 				Title:          fmt.Sprintf("Container %s/%s env var %q matches secret pattern (%s)", cgName, containerName, name, patName),
 				Detail: map[string]any{
+					"check":           "secret_pattern",
 					"container_group": cgName,
 					"container":       containerName,
 					"env_var_name":    name,
@@ -158,6 +160,7 @@ func scanEnvVars(ctx context.Context, sink findings.Sink, subID, location, cgID,
 				ResourceID:     cgID,
 				Title:          fmt.Sprintf("Container %s/%s env var %q has suspicious name (plaintext, not secureValue)", cgName, containerName, name),
 				Detail: map[string]any{
+					"check":           "suspicious_name",
 					"container_group": cgName,
 					"container":       containerName,
 					"env_var_name":    name,

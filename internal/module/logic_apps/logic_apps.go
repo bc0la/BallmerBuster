@@ -445,6 +445,7 @@ func checkTriggers(ctx context.Context, cred azcore.TokenCredential, workflowID,
 				ResourceID: workflowID,
 				Title:      fmt.Sprintf("Logic App %q has HTTP trigger %q without access control", wfName, trigger.Name),
 				Detail: map[string]any{
+					"check":          "open_trigger",
 					"workflow_name":  wfName,
 					"trigger_name":   trigger.Name,
 					"trigger_type":   "Request",
@@ -500,6 +501,7 @@ func scanActionLink(ctx context.Context, uri, direction, wfName, wfLocation, wfI
 				Title: fmt.Sprintf("Logic App %q action %q %s contain secret (%s pattern)",
 					wfName, actionName, direction, sp.name),
 				Detail: map[string]any{
+					"check":           "secret_pattern",
 					"workflow_name":   wfName,
 					"action_name":     actionName,
 					"direction":       direction,
@@ -520,6 +522,7 @@ func scanActionLink(ctx context.Context, uri, direction, wfName, wfLocation, wfI
 			Title: fmt.Sprintf("Logic App %q action %q %s contain suspicious key names",
 				wfName, actionName, direction),
 			Detail: map[string]any{
+				"check":         "suspicious_name",
 				"workflow_name": wfName,
 				"action_name":   actionName,
 				"direction":     direction,

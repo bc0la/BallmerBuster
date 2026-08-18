@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -72,6 +74,81 @@ type Engagement struct {
 	logFile *os.File
 	logMu   sync.Mutex
 	OnLog   func(module, subscriptionID, level, msg string)
+
+	// Optional plaintext log sinks configured via SetLogFiles, independent of
+	// the always-on ballmerbuster.log and the TUI's OnLog hook. logAll receives
+	// every event; logErr receives only warn/error/fatal events. Either may be
+	// nil. logClosers holds the underlying files to close on Close().
+	logAll     io.Writer
+	logErr     io.Writer
+	logClosers []io.Closer
+}
+
+// SetLogFiles opens optional plaintext log files that mirror LogEvent output.
+// allPath (if non-empty) receives every log line; errPath (if non-empty)
+// receives only warn/error lines, so a run's failures land in one small,
+// greppable file. Both are opened for append (so resume re-runs accumulate) and
+// created if missing.
+func (e *Engagement) SetLogFiles(allPath, errPath string) error {
+	open := func(p string) (*os.File, error) {
+		if p == "" {
+			return nil, nil
+		}
+		if d := filepath.Dir(p); d != "" && d != "." {
+			_ = os.MkdirAll(d, 0o755)
+		}
+		return os.OpenFile(p, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	}
+	f, err := open(allPath)
+	if err != nil {
+		return fmt.Errorf("open log file %s: %w", allPath, err)
+	}
+	if f != nil {
+		e.logAll = f
+		e.logClosers = append(e.logClosers, f)
+	}
+	g, err := open(errPath)
+	if err != nil {
+		return fmt.Errorf("open error-log file %s: %w", errPath, err)
+	}
+	if g != nil {
+		e.logErr = g
+		e.logClosers = append(e.logClosers, g)
+	}
+	return nil
+}
+
+// isErrLevel reports whether a log level should land in the errors-only file.
+// Module failures across the codebase are logged at "warn", so warn is included.
+func isErrLevel(level string) bool {
+	switch strings.ToLower(level) {
+	case "warn", "warning", "error", "err", "fatal":
+		return true
+	}
+	return false
+}
+
+func (e *Engagement) writeLogLine(module, subscriptionID, level, msg string) {
+	if e.logAll == nil && e.logErr == nil {
+		return
+	}
+	orDash := func(s string) string {
+		if s == "" {
+			return "-"
+		}
+		return s
+	}
+	line := fmt.Sprintf("%s [%-5s] %s %s: %s\n",
+		time.Now().UTC().Format(time.RFC3339),
+		strings.ToUpper(level), orDash(module), orDash(subscriptionID), msg)
+	e.logMu.Lock()
+	defer e.logMu.Unlock()
+	if e.logAll != nil {
+		_, _ = io.WriteString(e.logAll, line)
+	}
+	if e.logErr != nil && isErrLevel(level) {
+		_, _ = io.WriteString(e.logErr, line)
+	}
 }
 
 func Open(dir string) (*Engagement, error) {
@@ -100,6 +177,9 @@ func Open(dir string) (*Engagement, error) {
 func (e *Engagement) Close() error {
 	if e.logFile != nil {
 		_ = e.logFile.Close()
+	}
+	for _, c := range e.logClosers {
+		_ = c.Close()
 	}
 	return e.db.Close()
 }
@@ -221,6 +301,7 @@ func (e *Engagement) LogEvent(ctx context.Context, module, subscriptionID, level
 	if e.OnLog != nil {
 		e.OnLog(module, subscriptionID, level, msg)
 	}
+	e.writeLogLine(module, subscriptionID, level, msg)
 	now := time.Now().UTC()
 	if e.logFile != nil {
 		e.logMu.Lock()

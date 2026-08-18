@@ -130,6 +130,7 @@ func scanParamMap(ctx context.Context, sink findings.Sink, subID, deplID, rg, de
 				ResourceID:     deplID,
 				Title:          fmt.Sprintf("Deployment %s %s %q contains secret (%s pattern)", deplName, source, key, patName),
 				Detail: map[string]any{
+					"check":           "secret_pattern",
 					"deployment":      deplName,
 					"resource_group":  rg,
 					"source":          source,
@@ -150,6 +151,7 @@ func scanParamMap(ctx context.Context, sink findings.Sink, subID, deplID, rg, de
 				ResourceID:     deplID,
 				Title:          fmt.Sprintf("Deployment %s %s %q has suspicious name and is not secureString", deplName, source, key),
 				Detail: map[string]any{
+					"check":          "suspicious_name",
 					"deployment":     deplName,
 					"resource_group": rg,
 					"source":         source,

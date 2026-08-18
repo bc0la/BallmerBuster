@@ -93,6 +93,7 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 					ResourceID:     ptrVal(app.ID),
 					Title:          fmt.Sprintf("App %s setting %q matches secret pattern (%s)", appName, key, label),
 					Detail: map[string]any{
+						"check":           "secret_pattern",
 						"app_name":        appName,
 						"setting_key":     key,
 						"pattern_matched": label,
@@ -112,6 +113,7 @@ func (Module) Run(ctx context.Context, target creds.SubscriptionTarget, sink fin
 					ResourceID:     ptrVal(app.ID),
 					Title:          fmt.Sprintf("App %s setting %q has suspicious key name", appName, key),
 					Detail: map[string]any{
+						"check":       "suspicious_name",
 						"app_name":    appName,
 						"setting_key": key,
 						"reason":      "key name matches secret pattern",
