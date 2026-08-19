@@ -55,6 +55,14 @@ func Serve(addr, dir string) error {
 		}
 		writeJSON(w, s)
 	})
+	// Utils → TREVORspray: install into a per-engagement venv, build a userlist
+	// from DeHashed, and run recon / spray / single test-user attempts against
+	// O365/Entra with a per-user attempt cap. See trevorspray.go.
+	mux.HandleFunc("/api/utils/trevorspray/status", handleTSStatus(dir))
+	mux.HandleFunc("/api/utils/trevorspray/install", handleTSInstall(dir))
+	mux.HandleFunc("/api/utils/trevorspray/dehashed", handleTSDehashed(dir))
+	mux.HandleFunc("/api/utils/trevorspray/userlists", handleTSUserlists(dir))
+	mux.HandleFunc("/api/utils/trevorspray/run", handleTSRun(dir))
 	fmt.Printf("report listening on http://%s\n", addr)
 	return http.ListenAndServe(addr, mux)
 }

@@ -27,7 +27,58 @@
   nav.checkbar button .count { opacity: .6; margin-left: 3px; }
   nav.checkbar .checkbar-clear { background: #333; color: #ccc; border: 1px solid #555; text-decoration: none; border-radius: 4px; }
   nav.checkbar .checkbar-clear:hover { background: #555; }
+  nav.toptabs { display: flex; gap: 6px; margin-bottom: 10px; }
+  nav.toptabs button { background: #202020; color: #ddd; border: 1px solid #333; padding: 6px 18px; cursor: pointer; font: inherit; font-weight: 600; border-radius: 4px; }
+  nav.toptabs button.active { background: #2a4d69; border-color: #3a6d99; color: #fff; }
   #utils h2 { font-size: 16px; margin: 4px 0 8px; }
+  #utils h3 { font-size: 13px; margin: 0 0 8px; color: #cbd; text-transform: uppercase; letter-spacing: .5px; }
+  .utils-note { color: #aaa; font-size: 13px; max-width: 900px; line-height: 1.5; }
+  .utils-note code, .u-card code { background: #0c0c0c; border: 1px solid #222; padding: 0 4px; border-radius: 3px; }
+  .u-card { background: #161616; border: 1px solid #2a2a2a; border-radius: 6px; padding: 14px 16px; margin: 12px 0; max-width: 920px; }
+  .u-grid { display: grid; grid-template-columns: 160px 1fr; gap: 8px 12px; align-items: center; }
+  .u-grid label { color: #bbb; font-size: 13px; }
+  .u-grid input[type=text], .u-grid input[type=password], .u-grid input[type=number], .u-grid select, .u-card textarea {
+    background: #0c0c0c; color: #eee; border: 1px solid #333; border-radius: 4px; padding: 6px 8px; font: inherit; font-size: 13px; width: 100%; box-sizing: border-box; }
+  .u-card textarea { min-height: 70px; resize: vertical; font-family: monospace; font-size: 12px; }
+  .u-row { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+  .u-row label { color: #bbb; font-size: 13px; display: inline-flex; align-items: center; gap: 5px; }
+  .u-row .inline { display: inline-flex; align-items: center; gap: 6px; }
+  .u-row .inline input[type=number] { width: 72px; background: #0c0c0c; color: #eee; border: 1px solid #333; border-radius: 4px; padding: 4px 6px; font: inherit; }
+  .u-hint { color: #888; font-size: 12px; margin: 4px 0; }
+  .u-status { font-size: 13px; margin-bottom: 8px; }
+  .u-status .ok { color: #99d98c; font-weight: 600; }
+  .u-status .no { color: #ff9a3c; font-weight: 600; }
+  .console { background: #0a0a0a; border: 1px solid #222; padding: 8px; max-height: 55vh; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 12px/1.45 monospace; color: #d6d6d6; margin-top: 8px; border-radius: 4px; }
+  .console:empty { display: none; }
+  .badge { font-size: 11px; padding: 1px 6px; border-radius: 10px; border: 1px solid #333; }
+  .badge.ok { background: #16301a; color: #9cc99c; border-color: #2a5a2a; }
+  .badge.no { background: #301a16; color: #cc9c9c; border-color: #5a2a2a; }
+  .u-tag { display: inline-block; background: #24425a; color: #cfe; border: 1px solid #3a6d99; border-radius: 3px; padding: 1px 6px; font-size: 12px; margin: 2px; }
+  .u-tag button { background: none; border: none; color: #9bd; cursor: pointer; font: inherit; padding: 0; }
+  .term { border: 1px solid #222; border-radius: 5px; margin-top: 8px; overflow: hidden; }
+  .term:empty { display: none; }
+  .term-bar { display: flex; align-items: center; gap: 8px; background: #141414; border-bottom: 1px solid #222; padding: 5px 8px; font-size: 12px; }
+  .term-bar .dot { width: 10px; height: 10px; border-radius: 50%; background: #333; flex: none; }
+  .term-bar.running .dot { background: #ffd166; box-shadow: 0 0 6px #ffd166; animation: pulse 1s infinite; }
+  .term-bar.ok .dot { background: #99d98c; }
+  .term-bar.fail .dot { background: #ff5b5b; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+  .term-bar .title { font-weight: 600; color: #ccc; }
+  .term-bar .state { color: #999; }
+  .term-bar .spacer { flex: 1; }
+  .term-bar a { color: #7fb2e0; }
+  .term-bar button { background: #222; color: #bbb; border: 1px solid #333; border-radius: 3px; padding: 2px 8px; cursor: pointer; font: inherit; font-size: 12px; }
+  .term-body { background: #0a0a0a; padding: 8px; max-height: 55vh; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 12px/1.45 monospace; color: #d6d6d6; }
+  .term-body:empty::before { content: "— no output yet —"; color: #555; }
+  .u-count { font-size: 12px; color: #8ab; margin: 2px 0 6px; }
+  @media (max-width: 640px) {
+    main { padding: 12px; }
+    .u-card { padding: 12px; }
+    .u-grid { grid-template-columns: 1fr; gap: 4px 0; }
+    .u-grid label { margin-top: 6px; }
+    .u-row { gap: 10px; }
+    .term-body { max-height: 45vh; }
+  }
   .muted { color: #888; }
   main { padding: 16px 24px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
@@ -71,10 +122,12 @@
 <body>
 <header>
   <h1>BallmerBuster report</h1>
+  <nav class="toptabs" id="toptabs"></nav>
   <nav class="sections" id="sections"></nav>
   <nav class="chips" id="chips"></nav>
 </header>
 <main>
+  <div id="utils" style="display:none"></div>
   <div class="summary" id="summary"></div>
   <div class="toolbar" id="toolbar">
     <input type="search" id="filter" placeholder="filter...">
@@ -603,6 +656,448 @@ function downloadText(text, name, type) {
   URL.revokeObjectURL(a.href);
 }
 
+// ---- Top-level view: Report vs Utils -------------------------------------
+let topView = 'report';
+const REPORT_ELS = ['sections', 'chips', 'summary', 'toolbar', 'checkfilter', 'content'];
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+
+function renderTopTabs() {
+  const t = document.getElementById('toptabs');
+  t.innerHTML = '';
+  [['report', 'Report'], ['utils', 'Utils']].forEach(([k, label]) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    if (k === topView) b.classList.add('active');
+    b.onclick = () => setTopView(k);
+    t.appendChild(b);
+  });
+}
+
+function setTopView(v) {
+  topView = v;
+  const rep = v === 'report';
+  REPORT_ELS.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = rep ? '' : 'none'; });
+  document.getElementById('utils').style.display = rep ? 'none' : '';
+  renderTopTabs();
+  if (!rep) loadUtils();
+}
+
+// ---- Utils → TREVORspray -------------------------------------------------
+// Parses a POST Server-Sent-Events stream (EventSource only does GET). Frames
+// are `event: <name>\ndata: <payload>\n\n`; `line` payloads have newlines
+// backslash-escaped by the server, so we unescape them for the console.
+async function sseFetch(url, body, handlers) {
+  let resp;
+  try {
+    resp = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}), signal: handlers.signal });
+  } catch (e) { handlers.onError && handlers.onError(String(e)); return; }
+  if (!resp.ok || !resp.body) {
+    const t = await resp.text().catch(() => '');
+    handlers.onError && handlers.onError('HTTP ' + resp.status + (t ? ' — ' + t : ''));
+    return;
+  }
+  const reader = resp.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    let chunk;
+    try { chunk = await reader.read(); } catch (e) { break; }
+    if (chunk.done) break;
+    buf += dec.decode(chunk.value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf('\n\n')) >= 0) {
+      const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+      let ev = 'message', data = '';
+      frame.split('\n').forEach(l => {
+        if (l.startsWith('event:')) ev = l.slice(6).trim();
+        else if (l.startsWith('data:')) data += l.slice(5).replace(/^ /, '');
+      });
+      if (ev === 'line') handlers.onLine && handlers.onLine(data.replace(/\\n/g, '\n'));
+      else if (ev === 'done') { let d = {}; try { d = JSON.parse(data); } catch {} handlers.onDone && handlers.onDone(d); }
+    }
+  }
+}
+
+let _tsBuilt = false;
+let _tsRunAbort = null;
+let _tsTimer = null;
+
+// xterm 256-colour index → CSS colour. TREVORspray's logger emits
+// `\x1b[1;38;5;<N>m` sequences, so we need the full 256-colour cube.
+function xterm256(n) {
+  if (n < 16) return ['#000000','#cd0000','#00cd00','#cdcd00','#0000ee','#cd00cd','#00cdcd','#e5e5e5',
+    '#7f7f7f','#ff5b5b','#5bff5b','#ffff5b','#5c9cff','#ff5bff','#5bffff','#ffffff'][n];
+  if (n >= 232) { const v = 8 + (n - 232) * 10; return 'rgb(' + v + ',' + v + ',' + v + ')'; }
+  n -= 16;
+  const s = [0, 95, 135, 175, 215, 255];
+  return 'rgb(' + s[Math.floor(n / 36) % 6] + ',' + s[Math.floor(n / 6) % 6] + ',' + s[n % 6] + ')';
+}
+
+// ansiAppend renders text with ANSI SGR codes into `el` as coloured spans,
+// carrying style state across calls (output arrives line by line). Caps the
+// node count so a long spray can't grow the DOM without bound.
+function ansiAppend(el, text) {
+  const st = el._ansi || (el._ansi = { fg: null, bold: false });
+  // Only pin to the bottom if the viewer is already there — so scrolling up
+  // to read earlier output during a live run isn't yanked back down.
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 30;
+  const re = /\x1b\[([0-9;]*)m/g;
+  let last = 0, m;
+  const emit = (str) => {
+    if (!str) return;
+    const span = document.createElement('span');
+    if (st.fg) span.style.color = st.fg;
+    if (st.bold) span.style.fontWeight = '700';
+    span.textContent = str;
+    el.appendChild(span);
+  };
+  while ((m = re.exec(text))) {
+    emit(text.slice(last, m.index));
+    last = re.lastIndex;
+    let codes = m[1].split(';').filter(x => x !== '').map(Number);
+    if (!codes.length) codes = [0];
+    for (let i = 0; i < codes.length; i++) {
+      const c = codes[i];
+      if (c === 0) { st.fg = null; st.bold = false; }
+      else if (c === 1) st.bold = true;
+      else if (c === 22) st.bold = false;
+      else if (c === 39) st.fg = null;
+      else if (c === 38 && codes[i + 1] === 5) { st.fg = xterm256(codes[i + 2] || 0); i += 2; }
+      else if (c >= 30 && c <= 37) st.fg = xterm256(c - 30);
+      else if (c >= 90 && c <= 97) st.fg = xterm256(c - 90 + 8);
+    }
+  }
+  emit(text.slice(last));
+  while (el.childNodes.length > 5000) el.removeChild(el.firstChild);
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+function appendConsole(id, txt) {
+  const el = document.getElementById(id);
+  if (el) ansiAppend(el, txt);
+}
+
+// copyTerm copies a terminal body's text and briefly confirms on the button.
+function copyTerm(bodyId, btn) {
+  const el = document.getElementById(bodyId);
+  if (!el) return;
+  navigator.clipboard.writeText(el.textContent).then(() => {
+    const prev = btn.textContent; btn.textContent = 'copied';
+    setTimeout(() => { btn.textContent = prev; }, 1200);
+  }).catch(() => {});
+}
+
+function setTermState(barId, cls, stateText) {
+  const bar = document.getElementById(barId);
+  if (!bar) return;
+  bar.classList.remove('running', 'ok', 'fail');
+  if (cls) bar.classList.add(cls);
+  const st = bar.querySelector('.state');
+  if (st && stateText != null) st.innerHTML = stateText;
+}
+
+async function tsCheckStatus() {
+  const el = document.getElementById('ts-status');
+  if (!el) return;
+  let s = {};
+  try { s = await fetch('/api/utils/trevorspray/status').then(r => r.json()); } catch { el.innerHTML = '<span class="no">could not reach server</span>'; return; }
+  const runBtn = document.getElementById('ts-run-btn');
+  if (s.installed) {
+    el.innerHTML = '<span class="ok">✓ installed</span>' + (s.version ? ' <span class="muted">v' + esc(s.version) + '</span>' : '') + ' <span class="muted">' + esc(s.venv) + '</span>';
+    if (runBtn) runBtn.disabled = false;
+  } else {
+    el.innerHTML = '<span class="no">not installed</span>' + (s.python3_on_path ? '' : ' <span class="no">— python3 not on PATH</span>');
+    if (runBtn) runBtn.disabled = true;
+  }
+}
+
+function loadUtils() {
+  const root = document.getElementById('utils');
+  if (_tsBuilt) { tsCheckStatus(); return; }
+  _tsBuilt = true;
+
+  root.innerHTML =
+    '<h2>TREVORspray — O365 / Entra ID password spraying</h2>' +
+    '<p class="utils-note">Drive <a href="https://github.com/blacklanternsecurity/TREVORspray" target="_blank" rel="noopener">TREVORspray</a> against a Microsoft 365 / Entra tenant. ' +
+    'Build a target userlist from <code>DeHashed</code> (or paste emails), then run <code>--recon</code>, a password spray, or a single ' +
+    'test-user attempt. To protect real accounts, sprays are <strong>capped to a configurable number of passwords per user</strong> ' +
+    '(default 2). Everything lands under <code>&lt;engagement&gt;/trevorspray/</code> — a self-contained venv, per-engagement TREVORspray ' +
+    'state, generated userlists, and per-run logs (browse them under <code>/raw/trevorspray/</code>).</p>' +
+
+    // --- Install ---
+    '<div class="u-card">' +
+      '<h3>1 · Install</h3>' +
+      '<div class="u-status" id="ts-status">checking…</div>' +
+      '<button class="btn" id="ts-install-btn">Install / update TREVORspray</button>' +
+      '<div class="u-hint">Creates a Python venv under the engagement dir and <code>pip install</code>s TREVORspray + trevorproxy from git. Safe to re-run. Full log at <code>/raw/trevorspray/install.log</code>.</div>' +
+      '<div class="term" id="ts-install-term" style="display:none">' +
+        '<div class="term-bar" id="ts-install-bar"><span class="dot"></span><span class="title">install</span><span class="state">idle</span><span class="spacer"></span><button onclick="copyTerm(\'ts-install-body\',this)">copy</button><button onclick="document.getElementById(\'ts-install-body\').textContent=\'\'">clear</button></div>' +
+        '<div class="term-body" id="ts-install-body"></div>' +
+      '</div>' +
+    '</div>' +
+
+    // --- DeHashed ---
+    '<div class="u-card">' +
+      '<h3>2 · Build userlist from DeHashed <span class="muted" style="text-transform:none;font-weight:400">(optional)</span></h3>' +
+      '<div class="u-grid">' +
+        '<label>API endpoint</label><input type="text" id="dh-endpoint" placeholder="https://api.dehashed.com/v2/search">' +
+        '<label>API key</label><span style="display:flex;gap:6px"><input type="password" id="dh-key" placeholder="DeHashed API key" autocomplete="off"><button type="button" class="btn" id="dh-key-toggle" style="padding:4px 10px;flex:none">show</button></span>' +
+        '<label>Email <span class="muted">(v1 only)</span></label><input type="text" id="dh-email" placeholder="leave blank for v2 (Dehashed-Api-Key header)" autocomplete="off">' +
+        '<label>Domain / tenant</label><input type="text" id="dh-domain" placeholder="contoso.com">' +
+        '<label>Max results</label><input type="number" id="dh-size" value="100" min="1" max="10000">' +
+      '</div>' +
+      '<div class="u-hint">With an email set, uses the v1 API (GET + HTTP basic auth). Blank email uses the v2 API (POST + <code>Dehashed-Api-Key</code> header). Query is <code>domain:&lt;domain&gt;</code>.</div>' +
+      '<div class="u-row"><button class="btn" id="dh-btn">Fetch users from DeHashed</button></div>' +
+      '<div id="dh-result"></div>' +
+      '<div id="dh-userlists" class="u-hint"></div>' +
+    '</div>' +
+
+    // --- Run ---
+    '<div class="u-card">' +
+      '<h3>3 · Recon / spray / test</h3>' +
+      '<div class="u-row">' +
+        '<label><input type="radio" name="ts-mode" value="recon"> Recon (enumerate tenant)</label>' +
+        '<label><input type="radio" name="ts-mode" value="spray" checked> Password spray</label>' +
+        '<label><input type="radio" name="ts-mode" value="test"> Test single user</label>' +
+      '</div>' +
+      '<div class="u-grid">' +
+        '<label>Module</label><select id="ts-module">' +
+          ['msol','owa','adfs','okta','auth0','anyconnect','jumpcloud','officehome'].map(m => '<option value="' + m + '"' + (m === 'msol' ? ' selected' : '') + '>' + m + '</option>').join('') +
+        '</select>' +
+        '<label>Tenant / domain</label><input type="text" id="ts-domain" placeholder="contoso.com">' +
+        '<label>URL override <span class="muted">(opt)</span></label><input type="text" id="ts-url" placeholder="e.g. https://login.microsoftonline.com/&lt;tenant&gt;/oauth2/token">' +
+        '<label>User-enum <span class="muted">(recon)</span></label><select id="ts-userenum"><option value="">(interactive / default)</option><option value="onedrive">onedrive</option><option value="seamless_sso">seamless_sso</option><option value="teams_photo">teams_photo</option></select>' +
+      '</div>' +
+      '<div class="u-row" style="margin-top:10px"><label style="width:100%">Users / emails <span class="muted">(one per line — filled by DeHashed, or paste)</span></label></div>' +
+      '<textarea id="ts-users" placeholder="jdoe@contoso.com&#10;asmith@contoso.com"></textarea>' +
+      '<div class="u-count" id="ts-users-count"></div>' +
+      '<div class="u-row" style="margin-top:10px"><label style="width:100%">Passwords <span class="muted">(one per line; capped to max-attempts per user)</span></label></div>' +
+      '<textarea id="ts-passwords" placeholder="Winter2026!&#10;Summer2026!"></textarea>' +
+      '<div class="u-count" id="ts-pass-count"></div>' +
+      '<div class="u-row">' +
+        '<span class="inline">Max attempts / user <input type="number" id="ts-max" value="2" min="1" max="50"></span>' +
+        '<span class="inline">Delay (s) <input type="number" id="ts-delay" value="0" min="0" step="0.5"></span>' +
+        '<span class="inline">Lockout delay (s) <input type="number" id="ts-lockdelay" value="0" min="0" step="1"></span>' +
+        '<span class="inline">Jitter (s) <input type="number" id="ts-jitter" value="0" min="0" step="0.5"></span>' +
+        '<span class="inline">Threads <input type="number" id="ts-threads" value="1" min="1" max="50"></span>' +
+      '</div>' +
+      '<div class="u-row">' +
+        '<label><input type="checkbox" id="ts-exit"> Exit on first success</label>' +
+        '<label><input type="checkbox" id="ts-ignorelock"> Ignore lockouts</label>' +
+        '<label><input type="checkbox" id="ts-force"> Force (retry already-tried)</label>' +
+        '<label><input type="checkbox" id="ts-verbose"> Verbose</label>' +
+      '</div>' +
+      '<div class="u-hint">MFA note: the <code>msol</code> module reports each account&#39;s status (valid / invalid / locked / <strong>MFA enabled</strong>). Different modules hit different endpoints — some legacy auth paths do not enforce MFA, so switching module is the MFA-bypass lever.</div>' +
+      '<div class="u-row"><button class="btn" id="ts-run-btn" disabled>Run TREVORspray</button><button class="btn btn-warn" id="ts-stop-btn" style="display:none">Stop</button></div>' +
+      '<div class="term" id="ts-run-term" style="display:none">' +
+        '<div class="term-bar" id="ts-run-bar"><span class="dot"></span><span class="title">trevorspray</span><span class="state">idle</span><span class="spacer"></span><span id="ts-run-links"></span><button onclick="copyTerm(\'ts-run-body\',this)">copy</button><button onclick="document.getElementById(\'ts-run-body\').textContent=\'\'">clear</button></div>' +
+        '<div class="term-body" id="ts-run-body"></div>' +
+      '</div>' +
+    '</div>';
+
+  // Wire up.
+  document.getElementById('ts-install-btn').onclick = () => {
+    const btn = document.getElementById('ts-install-btn');
+    document.getElementById('ts-install-term').style.display = '';
+    document.getElementById('ts-install-body').textContent = '';
+    btn.disabled = true;
+    setTermState('ts-install-bar', 'running', 'installing…');
+    sseFetch('/api/utils/trevorspray/install', {}, {
+      onLine: t => appendConsole('ts-install-body', t + '\n'),
+      onError: e => { appendConsole('ts-install-body', '[error] ' + e + '\n'); setTermState('ts-install-bar', 'fail', 'error'); btn.disabled = false; },
+      onDone: d => { setTermState('ts-install-bar', d.ok ? 'ok' : 'fail', d.ok ? 'installed ✓' : 'failed (exit ' + d.exit + ')'); btn.disabled = false; tsCheckStatus(); },
+    });
+  };
+
+  document.getElementById('dh-btn').onclick = async () => {
+    const btn = document.getElementById('dh-btn');
+    const out = document.getElementById('dh-result');
+    btn.disabled = true; out.innerHTML = '<span class="muted">querying DeHashed…</span>';
+    try {
+      const resp = await fetch('/api/utils/trevorspray/dehashed', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          endpoint: document.getElementById('dh-endpoint').value.trim(),
+          api_key: document.getElementById('dh-key').value,
+          email: document.getElementById('dh-email').value.trim(),
+          domain: document.getElementById('dh-domain').value.trim(),
+          size: parseInt(document.getElementById('dh-size').value, 10) || 100,
+        }),
+      });
+      if (!resp.ok) { out.innerHTML = '<span class="no">' + esc(await resp.text()) + '</span>'; return; }
+      const d = await resp.json();
+      if (!d.count) { out.innerHTML = '<span class="no">no users found</span>'; return; }
+      out.innerHTML = '<div class="u-hint">Found <strong>' + d.count + '</strong> ' + esc(d.kind) + '(s) ' +
+        '(' + d.emails + ' emails, ' + d.usernames + ' usernames' + (d.total != null ? ', total matches ' + esc(String(d.total)) : '') + ')' +
+        (d.saved_path ? ' — saved to <code>' + esc(d.saved_path) + '</code>' : '') + '. Loaded into the users box below.</div>' +
+        '<div>' + d.users.slice(0, 40).map(u => '<span class="u-tag">' + esc(u) + '</span>').join('') + (d.users.length > 40 ? ' <span class="muted">+' + (d.users.length - 40) + ' more</span>' : '') + '</div>';
+      setUsers(d.users.join('\n'));
+      const dom = document.getElementById('dh-domain').value.trim();
+      if (dom && !document.getElementById('ts-domain').value.trim()) document.getElementById('ts-domain').value = dom;
+      loadUserlists();
+    } catch (e) {
+      out.innerHTML = '<span class="no">' + esc(String(e)) + '</span>';
+    } finally { btn.disabled = false; }
+  };
+
+  document.getElementById('ts-run-btn').onclick = () => {
+    const mode = (document.querySelector('input[name="ts-mode"]:checked') || {}).value || 'spray';
+    // Guardrail: spraying a live tenant risks account lockouts. Show the attempt
+    // math and require confirmation before any credential is sent.
+    if (mode !== 'recon') {
+      const nu = countLines(document.getElementById('ts-users').value);
+      const np = countLines(document.getElementById('ts-passwords').value);
+      if (!nu || !np) { alert('Add at least one user and one password.'); return; }
+      const perUser = Math.min(np, parseInt(document.getElementById('ts-max').value, 10) || 2);
+      const target = document.getElementById('ts-domain').value.trim() || document.getElementById('ts-url').value.trim() || 'the configured endpoint';
+      const total = (mode === 'test' ? 1 : nu) * perUser;
+      if (!confirm('Authorized testing only — confirm you have permission to spray this tenant.\n\n' +
+        (mode === 'test' ? '1 test user' : nu + ' users') + ' × ' + perUser + ' password(s) = ' + total +
+        ' login attempt(s) against ' + target + '.\n\nProceed?')) return;
+    }
+    document.getElementById('ts-run-term').style.display = '';
+    document.getElementById('ts-run-body').textContent = '';
+    document.getElementById('ts-run-links').innerHTML = '';
+    const body = {
+      mode,
+      module: document.getElementById('ts-module').value,
+      domain: document.getElementById('ts-domain').value.trim(),
+      url: document.getElementById('ts-url').value.trim(),
+      user_enum: document.getElementById('ts-userenum').value,
+      users: [document.getElementById('ts-users').value],
+      passwords: [document.getElementById('ts-passwords').value],
+      max_attempts: parseInt(document.getElementById('ts-max').value, 10) || 2,
+      delay: parseFloat(document.getElementById('ts-delay').value) || 0,
+      lockout_delay: parseFloat(document.getElementById('ts-lockdelay').value) || 0,
+      jitter: parseFloat(document.getElementById('ts-jitter').value) || 0,
+      threads: parseInt(document.getElementById('ts-threads').value, 10) || 1,
+      exit_on_success: document.getElementById('ts-exit').checked,
+      ignore_lockouts: document.getElementById('ts-ignorelock').checked,
+      force: document.getElementById('ts-force').checked,
+      verbose: document.getElementById('ts-verbose').checked,
+    };
+    const runBtn = document.getElementById('ts-run-btn');
+    const stopBtn = document.getElementById('ts-stop-btn');
+    _tsRunAbort = new AbortController();
+    runBtn.disabled = true; stopBtn.style.display = '';
+    // Live elapsed timer in the terminal bar.
+    const t0 = Date.now();
+    clearInterval(_tsTimer);
+    _tsTimer = setInterval(() => setTermState('ts-run-bar', 'running', mode + ' · running ' + Math.round((Date.now() - t0) / 1000) + 's'), 1000);
+    setTermState('ts-run-bar', 'running', mode + ' · running 0s');
+    const finish = (cls, label, d) => {
+      clearInterval(_tsTimer);
+      const secs = Math.round((Date.now() - t0) / 1000);
+      setTermState('ts-run-bar', cls, label + ' · ' + secs + 's');
+      runBtn.disabled = false; stopBtn.style.display = 'none'; _tsRunAbort = null;
+      if (d && (d.log || d.run_dir)) {
+        document.getElementById('ts-run-links').innerHTML =
+          (d.run_dir ? '<a href="' + esc(d.run_dir) + '" target="_blank" rel="noopener">output dir</a> · ' : '') +
+          (d.log ? '<a href="' + esc(d.log) + '" target="_blank" rel="noopener">run log</a> · ' : '') +
+          (d.tool_log ? '<a href="' + esc(d.tool_log) + '" target="_blank" rel="noopener">tool log</a> ' : '');
+      }
+    };
+    sseFetch('/api/utils/trevorspray/run', body, {
+      signal: _tsRunAbort.signal,
+      onLine: t => appendConsole('ts-run-body', t + '\n'),
+      onError: e => { appendConsole('ts-run-body', '[error] ' + e + '\n'); finish('fail', 'error'); },
+      onDone: d => { finish(d.ok ? 'ok' : 'fail', d.ok ? 'finished (exit 0)' : 'exit ' + d.exit, d); },
+    });
+  };
+
+  document.getElementById('ts-stop-btn').onclick = () => {
+    if (_tsRunAbort) {
+      _tsRunAbort.abort();
+      appendConsole('ts-run-body', '\n[stopped by user]\n');
+      clearInterval(_tsTimer);
+      setTermState('ts-run-bar', 'fail', 'stopped');
+      document.getElementById('ts-run-btn').disabled = false;
+      document.getElementById('ts-stop-btn').style.display = 'none';
+      _tsRunAbort = null;
+    }
+  };
+
+  // Reveal / hide the DeHashed API key.
+  document.getElementById('dh-key-toggle').onclick = () => {
+    const inp = document.getElementById('dh-key');
+    const show = inp.type === 'password';
+    inp.type = show ? 'text' : 'password';
+    document.getElementById('dh-key-toggle').textContent = show ? 'hide' : 'show';
+  };
+
+  // Persist non-secret settings across reloads (never the API key, email, or
+  // the user/password lists).
+  restoreTsSettings();
+  document.getElementById('utils').addEventListener('change', saveTsSettings);
+  document.getElementById('utils').addEventListener('input', e => { if (TS_PERSIST.has(e.target.id)) saveTsSettings(); });
+
+  // Live user/password counters — show the effective per-user attempt count.
+  const countLines = s => s.split('\n').map(x => x.trim()).filter(Boolean).length;
+  const updateCounts = () => {
+    const nu = countLines(document.getElementById('ts-users').value);
+    const np = countLines(document.getElementById('ts-passwords').value);
+    const max = parseInt(document.getElementById('ts-max').value, 10) || 2;
+    document.getElementById('ts-users-count').textContent = nu + ' user' + (nu === 1 ? '' : 's');
+    const eff = Math.min(np, max);
+    document.getElementById('ts-pass-count').innerHTML = np + ' password' + (np === 1 ? '' : 's') +
+      (np > max ? ' <span class="no">→ capped to ' + eff + '/user</span>' : ' <span class="muted">→ ' + eff + '/user</span>');
+  };
+  ['ts-users', 'ts-passwords', 'ts-max'].forEach(id => document.getElementById(id).addEventListener('input', updateCounts));
+  updateCounts();
+
+  tsCheckStatus();
+  loadUserlists();
+}
+
+// setUsers fills the users box and refreshes the derived counters.
+function setUsers(text) {
+  const el = document.getElementById('ts-users');
+  if (!el) return;
+  el.value = text;
+  el.dispatchEvent(new Event('input'));
+}
+
+// loadUserlists shows the userlist files already saved under the engagement,
+// each with a Load button that repopulates the users box from disk.
+async function loadUserlists() {
+  const el = document.getElementById('dh-userlists');
+  if (!el) return;
+  let lists = [];
+  try { lists = await fetch('/api/utils/trevorspray/userlists').then(r => r.json()) || []; } catch { return; }
+  if (!lists.length) { el.innerHTML = ''; return; }
+  el.innerHTML = 'Saved userlists: ' + lists.map((l, i) =>
+    '<span class="u-tag"><button data-i="' + i + '">' + esc(l.name) + ' (' + l.count + ')</button></span>').join(' ');
+  el.querySelectorAll('button[data-i]').forEach(b => {
+    b.onclick = async () => {
+      const l = lists[+b.dataset.i];
+      try { setUsers((await fetch(l.raw_url).then(r => r.text())).trim()); } catch {}
+    };
+  });
+}
+
+// Non-secret settings persisted across reloads (localStorage). The API key,
+// email, and the user/password lists are deliberately never stored.
+const TS_KEEP = ['dh-endpoint', 'dh-domain', 'dh-size', 'ts-module', 'ts-domain', 'ts-url', 'ts-userenum', 'ts-max', 'ts-delay', 'ts-lockdelay', 'ts-jitter', 'ts-threads'];
+const TS_CHECK = ['ts-exit', 'ts-ignorelock', 'ts-force', 'ts-verbose'];
+const TS_PERSIST = new Set([...TS_KEEP, ...TS_CHECK]);
+function saveTsSettings() {
+  const o = {};
+  TS_KEEP.forEach(id => { const el = document.getElementById(id); if (el) o[id] = el.value; });
+  TS_CHECK.forEach(id => { const el = document.getElementById(id); if (el) o[id] = el.checked; });
+  const m = document.querySelector('input[name="ts-mode"]:checked'); if (m) o.mode = m.value;
+  try { localStorage.setItem('bb_trevorspray', JSON.stringify(o)); } catch {}
+}
+function restoreTsSettings() {
+  let o = {};
+  try { o = JSON.parse(localStorage.getItem('bb_trevorspray') || '{}'); } catch {}
+  TS_KEEP.forEach(id => { if (o[id] != null) { const el = document.getElementById(id); if (el) el.value = o[id]; } });
+  TS_CHECK.forEach(id => { if (o[id] != null) { const el = document.getElementById(id); if (el) el.checked = o[id]; } });
+  if (o.mode) { const r = document.querySelector('input[name="ts-mode"][value="' + o.mode + '"]'); if (r) r.checked = true; }
+}
+
 // ---- Boot ----------------------------------------------------------------
 // Debounce the text filter so typing only rebuilds the table body once the
 // user pauses, keeping keystrokes responsive on large finding sets.
@@ -627,6 +1122,7 @@ async function boot() {
     f._check = checkKey(f);
   }
   renderAll();
+  renderTopTabs();
 }
 boot();
 </script>
