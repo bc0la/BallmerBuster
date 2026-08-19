@@ -22,7 +22,15 @@ var indexHTML []byte
 func Serve(addr, dir string) error {
 	dbPath := filepath.Join(dir, engagement.DBFileName)
 	if _, err := os.Stat(dbPath); err != nil {
-		return fmt.Errorf("engagement db not found at %s: %w", dbPath, err)
+		// No collected data yet: bootstrap an empty engagement so the report
+		// still serves. The Report tab is empty, but the Utils tab (e.g.
+		// TREVORspray) works standalone without any findings.
+		eng, oerr := engagement.Open(dir)
+		if oerr != nil {
+			return fmt.Errorf("engagement db not found at %s and could not create one: %w", dbPath, oerr)
+		}
+		_ = eng.Close()
+		fmt.Printf("no engagement db at %s — created an empty one (Utils tab works without collected data)\n", dbPath)
 	}
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
