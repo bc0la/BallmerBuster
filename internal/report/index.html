@@ -872,6 +872,7 @@ function loadUtils() {
         '<label><input type="radio" name="ts-mode" value="recon"> Recon (enumerate tenant)</label>' +
         '<label><input type="radio" name="ts-mode" value="spray" checked> Password spray</label>' +
         '<label><input type="radio" name="ts-mode" value="test"> Test single user</label>' +
+        '<label><input type="radio" name="ts-mode" value="combo"> Combo (user:pass)</label>' +
       '</div>' +
       '<div class="u-grid">' +
         '<label>Module</label><select id="ts-module">' +
@@ -881,12 +882,21 @@ function loadUtils() {
         '<label>URL override <span class="muted">(opt)</span></label><input type="text" id="ts-url" placeholder="e.g. https://login.microsoftonline.com/&lt;tenant&gt;/oauth2/token">' +
         '<label>User-enum <span class="muted">(recon)</span></label><select id="ts-userenum"><option value="">(interactive / default)</option><option value="onedrive">onedrive</option><option value="seamless_sso">seamless_sso</option><option value="teams_photo">teams_photo</option></select>' +
       '</div>' +
-      '<div class="u-row" style="margin-top:10px"><label style="width:100%">Users / emails <span class="muted">(one per line — filled by DeHashed, or paste)</span></label></div>' +
-      '<textarea id="ts-users" placeholder="jdoe@contoso.com&#10;asmith@contoso.com"></textarea>' +
-      '<div class="u-count" id="ts-users-count"></div>' +
-      '<div class="u-row" style="margin-top:10px"><label style="width:100%">Passwords <span class="muted">(one per line; capped to max-attempts per user)</span></label></div>' +
-      '<textarea id="ts-passwords" placeholder="Winter2026!&#10;Summer2026!"></textarea>' +
-      '<div class="u-count" id="ts-pass-count"></div>' +
+      '<div id="ts-users-block">' +
+        '<div class="u-row" style="margin-top:10px"><label style="width:100%">Users / emails <span class="muted">(one per line — filled by DeHashed, or paste)</span></label></div>' +
+        '<textarea id="ts-users" placeholder="jdoe@contoso.com&#10;asmith@contoso.com"></textarea>' +
+        '<div class="u-count" id="ts-users-count"></div>' +
+      '</div>' +
+      '<div id="ts-pass-block">' +
+        '<div class="u-row" style="margin-top:10px"><label style="width:100%">Passwords <span class="muted">(one per line; capped to max-attempts per user)</span></label></div>' +
+        '<textarea id="ts-passwords" placeholder="Winter2026!&#10;Summer2026!"></textarea>' +
+        '<div class="u-count" id="ts-pass-count"></div>' +
+      '</div>' +
+      '<div id="ts-combo-block" style="display:none">' +
+        '<div class="u-row" style="margin-top:10px"><label style="width:100%">Combos <span class="muted">(one <code>user:password</code> per line; passed to <code>-up</code>, capped to max-attempts per user)</span></label></div>' +
+        '<textarea id="ts-combos" placeholder="jdoe@contoso.com:Winter2026!&#10;asmith@contoso.com:Summer2026!"></textarea>' +
+        '<div class="u-count" id="ts-combo-count"></div>' +
+      '</div>' +
       '<div class="u-row">' +
         '<span class="inline">Max attempts / user <input type="number" id="ts-max" value="2" min="1" max="50"></span>' +
         '<span class="inline">Delay (s) <input type="number" id="ts-delay" value="0" min="0" step="0.5"></span>' +
@@ -955,15 +965,23 @@ function loadUtils() {
 
   document.getElementById('ts-run-btn').onclick = () => {
     const mode = (document.querySelector('input[name="ts-mode"]:checked') || {}).value || 'spray';
-    // Guardrail: spraying a live tenant risks account lockouts. Show the attempt
+    // Guardrail: hitting a live tenant risks account lockouts. Show the attempt
     // math and require confirmation before any credential is sent.
-    if (mode !== 'recon') {
+    const max = parseInt(document.getElementById('ts-max').value, 10) || 2;
+    const doms = splitDomains(document.getElementById('ts-domain').value);
+    const target = (doms.length ? doms.join(', ') : '') || document.getElementById('ts-url').value.trim() || 'the configured endpoint';
+    if (mode === 'combo') {
+      const st = comboStats(document.getElementById('ts-combos').value, max);
+      if (!st.pairs) { alert('Add at least one user:password pair.'); return; }
+      if (!confirm('Authorized testing only — confirm you have permission to test this tenant.\n\n' +
+        st.attempts + ' credential pair(s) across ' + st.users + ' user(s)' +
+        (st.dropped ? ' (' + st.dropped + ' dropped by the ' + max + '/user cap)' : '') +
+        ' against ' + target + '.\n\nProceed?')) return;
+    } else if (mode !== 'recon') {
       const nu = countLines(document.getElementById('ts-users').value);
       const np = countLines(document.getElementById('ts-passwords').value);
       if (!nu || !np) { alert('Add at least one user and one password.'); return; }
-      const perUser = Math.min(np, parseInt(document.getElementById('ts-max').value, 10) || 2);
-      const doms = splitDomains(document.getElementById('ts-domain').value);
-      const target = (doms.length ? doms.join(', ') : '') || document.getElementById('ts-url').value.trim() || 'the configured endpoint';
+      const perUser = Math.min(np, max);
       const total = (mode === 'test' ? 1 : nu) * perUser;
       if (!confirm('Authorized testing only — confirm you have permission to spray this tenant.\n\n' +
         (mode === 'test' ? '1 test user' : nu + ' users') + ' × ' + perUser + ' password(s) = ' + total +
@@ -980,6 +998,7 @@ function loadUtils() {
       user_enum: document.getElementById('ts-userenum').value,
       users: [document.getElementById('ts-users').value],
       passwords: [document.getElementById('ts-passwords').value],
+      combos: [document.getElementById('ts-combos').value],
       max_attempts: parseInt(document.getElementById('ts-max').value, 10) || 2,
       delay: parseFloat(document.getElementById('ts-delay').value) || 0,
       lockout_delay: parseFloat(document.getElementById('ts-lockdelay').value) || 0,
@@ -1045,7 +1064,7 @@ function loadUtils() {
   document.getElementById('utils').addEventListener('change', saveTsSettings);
   document.getElementById('utils').addEventListener('input', e => { if (TS_PERSIST.has(e.target.id)) saveTsSettings(); });
 
-  // Live user/password counters — show the effective per-user attempt count.
+  // Live user/password/combo counters — show the effective per-user attempts.
   const countLines = s => s.split('\n').map(x => x.trim()).filter(Boolean).length;
   const updateCounts = () => {
     const nu = countLines(document.getElementById('ts-users').value);
@@ -1055,8 +1074,15 @@ function loadUtils() {
     const eff = Math.min(np, max);
     document.getElementById('ts-pass-count').innerHTML = np + ' password' + (np === 1 ? '' : 's') +
       (np > max ? ' <span class="no">→ capped to ' + eff + '/user</span>' : ' <span class="muted">→ ' + eff + '/user</span>');
+    const cs = comboStats(document.getElementById('ts-combos').value, max);
+    document.getElementById('ts-combo-count').innerHTML = cs.pairs + ' pair' + (cs.pairs === 1 ? '' : 's') + ' · ' +
+      cs.users + ' user' + (cs.users === 1 ? '' : 's') +
+      (cs.dropped ? ' <span class="no">→ ' + cs.dropped + ' dropped (' + max + '/user)</span>'
+                  : ' <span class="muted">→ ' + cs.attempts + ' attempt' + (cs.attempts === 1 ? '' : 's') + '</span>');
   };
-  ['ts-users', 'ts-passwords', 'ts-max'].forEach(id => document.getElementById(id).addEventListener('input', updateCounts));
+  ['ts-users', 'ts-passwords', 'ts-max', 'ts-combos'].forEach(id => document.getElementById(id).addEventListener('input', updateCounts));
+  document.querySelectorAll('input[name="ts-mode"]').forEach(r => r.addEventListener('change', () => { updateModeVisibility(); updateCounts(); }));
+  updateModeVisibility();
   updateCounts();
 
   tsCheckStatus();
@@ -1083,6 +1109,33 @@ function splitDomains(s) {
 }
 
 function basename(p) { return (p || '').split('/').pop(); }
+
+// comboStats summarizes a user:password combo list, mirroring the server-side
+// per-user attempt cap so the confirmation and counters match what will run.
+function comboStats(text, max) {
+  const counts = {};
+  let pairs = 0, attempts = 0, dropped = 0;
+  for (let line of (text || '').split('\n')) {
+    line = line.trim();
+    if (!line || line.indexOf(':') < 0) continue;
+    pairs++;
+    const u = line.slice(0, line.indexOf(':')).toLowerCase();
+    counts[u] = (counts[u] || 0) + 1;
+    if (counts[u] <= max) attempts++; else dropped++;
+  }
+  return { pairs, users: Object.keys(counts).length, attempts, dropped };
+}
+
+// updateModeVisibility shows only the input boxes relevant to the chosen mode:
+// recon → users (optional, for enum); spray/test → users + passwords;
+// combo → the user:password box.
+function updateModeVisibility() {
+  const mode = (document.querySelector('input[name="ts-mode"]:checked') || {}).value || 'spray';
+  const show = (id, on) => { const el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; };
+  show('ts-users-block', mode === 'spray' || mode === 'test' || mode === 'recon');
+  show('ts-pass-block', mode === 'spray' || mode === 'test');
+  show('ts-combo-block', mode === 'combo');
+}
 
 // Columns rendered in the credential table and CSV (key → header label).
 const DH_COLS = [

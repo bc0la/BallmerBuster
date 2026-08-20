@@ -139,6 +139,12 @@ Pick a **mode**:
   max-attempts passwords.
 - **Test single user** — uses only the first user and forces exit-on-first-
   success; for validating one credential / checking MFA on one account.
+- **Combo (user:pass)** — paste your own `user:password` pairs (one per line);
+  each is tried as an exact pair via TREVORspray's `-up`, with **no**
+  user×password cross-product. Pairs are still capped to **max-attempts per
+  username** (extras dropped with a warning) to protect against lockouts. Use
+  this when you already have specific credentials to validate (e.g. reused
+  passwords from the DeHashed table) rather than spraying a shared password.
 
 Key fields:
 

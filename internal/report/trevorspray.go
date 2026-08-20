@@ -685,15 +685,16 @@ func handleTSDehashed(dir string) http.HandlerFunc {
 	}
 }
 
-// --- Run (recon / spray / test-user) ---------------------------------------
+// --- Run (recon / spray / test-user / combo) -------------------------------
 
 type tsRunReq struct {
-	Mode          string   `json:"mode"` // "recon" | "spray" | "test"
+	Mode          string   `json:"mode"` // "recon" | "spray" | "test" | "combo"
 	Module        string   `json:"module"`
 	Domain        string   `json:"domain"`
 	URL           string   `json:"url"`
 	Users         []string `json:"users"`
 	Passwords     []string `json:"passwords"`
+	Combos        []string `json:"combos"` // "user:password" pairs → TREVORspray -up
 	MaxAttempts   int      `json:"max_attempts"`
 	Delay         float64  `json:"delay"`
 	LockoutDelay  float64  `json:"lockout_delay"`
@@ -731,6 +732,32 @@ func cleanLines(in []string) []string {
 	return out
 }
 
+// capCombos keeps only well-formed "user:password" pairs and enforces the
+// per-user attempt ceiling by keeping at most maxPerUser pairs for any one user
+// (matched case-insensitively on the part before the first colon). It returns
+// the kept lines, the number of distinct users, and how many pairs were dropped
+// by the cap so the lockout guardrail holds for combo runs too.
+func capCombos(lines []string, maxPerUser int) (kept []string, users, dropped int) {
+	counts := map[string]int{}
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l == "" || !strings.Contains(l, ":") {
+			continue
+		}
+		user := strings.ToLower(strings.SplitN(l, ":", 2)[0])
+		if counts[user] == 0 {
+			users++
+		}
+		if counts[user] >= maxPerUser {
+			dropped++
+			continue
+		}
+		counts[user]++
+		kept = append(kept, l)
+	}
+	return kept, users, dropped
+}
+
 func handleTSRun(dir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := tsPathsFor(dir)
@@ -760,19 +787,32 @@ func handleTSRun(dir string) http.HandlerFunc {
 
 		users := cleanLines(req.Users)
 		passwords := cleanLines(req.Passwords)
+		combos := cleanLines(req.Combos)
 
 		flusher, ok := tsSSEHead(w)
 		if !ok {
 			return
 		}
 
-		// Enforce the per-user attempt ceiling: TREVORspray tries one password
-		// per user per pass, so capping the password list caps attempts/user.
+		// Enforce the per-user attempt ceiling. For spray/test, TREVORspray tries
+		// one password per user per pass, so capping the password list caps
+		// attempts/user. For combo runs, cap the pairs per user directly.
 		attemptNote := ""
-		if req.Mode != "recon" && len(passwords) > req.MaxAttempts {
-			attemptNote = fmt.Sprintf("[!] capping to %d password(s) per user (max_attempts=%d) to avoid lockouts; %d supplied",
-				req.MaxAttempts, req.MaxAttempts, len(passwords))
-			passwords = passwords[:req.MaxAttempts]
+		comboUsers := 0
+		switch req.Mode {
+		case "spray", "test":
+			if len(passwords) > req.MaxAttempts {
+				attemptNote = fmt.Sprintf("[!] capping to %d password(s) per user (max_attempts=%d) to avoid lockouts; %d supplied",
+					req.MaxAttempts, req.MaxAttempts, len(passwords))
+				passwords = passwords[:req.MaxAttempts]
+			}
+		case "combo":
+			var dropped int
+			combos, comboUsers, dropped = capCombos(combos, req.MaxAttempts)
+			if dropped > 0 {
+				attemptNote = fmt.Sprintf("[!] dropped %d pair(s): capped to %d attempt(s) per user (max_attempts=%d) to avoid lockouts",
+					dropped, req.MaxAttempts, req.MaxAttempts)
+			}
 		}
 
 		// Validate mode requirements. Recon accepts a pasted list of domains
@@ -796,6 +836,13 @@ func handleTSRun(dir string) http.HandlerFunc {
 				tsSend(w, flusher, "line", fmt.Sprintf("[!] test mode expects a single user; using the first of %d", len(users)))
 				users = users[:1]
 			}
+		case "combo":
+			if len(combos) == 0 {
+				tsSend(w, flusher, "line", "[error] combo mode requires at least one 'user:password' pair")
+				tsSendJSON(w, flusher, "done", map[string]any{"ok": false, "exit": 2})
+				return
+			}
+			tsSend(w, flusher, "line", fmt.Sprintf("[*] %d combo pair(s) across %d user(s)", len(combos), comboUsers))
 		default:
 			tsSend(w, flusher, "line", "[error] unknown mode: "+req.Mode)
 			tsSendJSON(w, flusher, "done", map[string]any{"ok": false, "exit": 2})
@@ -872,6 +919,14 @@ func handleTSRun(dir string) http.HandlerFunc {
 			_ = os.WriteFile(passFile, []byte(strings.Join(passwords, "\n")+"\n"), 0o644)
 			a := []string{"-m", req.Module, "-u", usersFile, "-p", passFile}
 			if req.ExitOnSuccess || req.Mode == "test" {
+				a = append(a, "-e")
+			}
+			invs = append(invs, invocation{label: req.Mode, args: append(a, common...)})
+		case "combo":
+			comboFile := filepath.Join(runDir, "userpass.txt")
+			_ = os.WriteFile(comboFile, []byte(strings.Join(combos, "\n")+"\n"), 0o644)
+			a := []string{"-m", req.Module, "-up", comboFile}
+			if req.ExitOnSuccess {
 				a = append(a, "-e")
 			}
 			invs = append(invs, invocation{label: req.Mode, args: append(a, common...)})
