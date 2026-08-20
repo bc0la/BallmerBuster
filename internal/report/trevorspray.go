@@ -231,11 +231,14 @@ func handleTSInstall(dir string) http.HandlerFunc {
 		}
 
 		// pip install steps. TREVORspray and its trevorproxy dependency are
-		// installed straight from git per the project's README.
+		// installed straight from git per the project's README. exchangelib is
+		// pinned to 4.9.0 last so it overrides whatever TREVORspray's resolver
+		// pulled — newer releases break TREVORspray's owa/exchange auth paths.
 		steps := [][]string{
 			{p.python, "-m", "pip", "install", "--upgrade", "pip"},
 			{p.pip, "install", "git+https://github.com/blacklanternsecurity/trevorproxy"},
 			{p.pip, "install", "git+https://github.com/blacklanternsecurity/TREVORspray"},
+			{p.pip, "install", "exchangelib==4.9.0"},
 		}
 		for _, step := range steps {
 			tsSend(w, flusher, "line", "\n[*] $ "+strings.Join(step, " "))

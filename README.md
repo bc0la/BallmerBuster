@@ -94,8 +94,10 @@ before the run with a warning.
 
 Click **Install / update TREVORspray**. It creates a venv at
 `<engagement>/trevorspray/venv` and `pip install`s `trevorproxy` + `TREVORspray`
-from git, streaming pip output into the terminal and flipping the status pill to
-**✓ installed**. Safe to re-run to upgrade. Log: `/raw/trevorspray/install.log`.
+from git, then pins **`exchangelib==4.9.0`** (newer releases break TREVORspray's
+owa/exchange auth paths), streaming pip output into the terminal and flipping
+the status pill to **✓ installed**. Safe to re-run — re-running also re-applies
+the exchangelib pin on an existing venv. Log: `/raw/trevorspray/install.log`.
 The **Run** button stays disabled until this succeeds.
 
 ### 2 · Build a userlist from DeHashed *(optional)*
