@@ -20,6 +20,12 @@ import (
 var indexHTML []byte
 
 func Serve(addr, dir string) error {
+	// Resolve to an absolute path up front: the Utils/TREVORspray runner sets a
+	// child working directory, so any relative venv/binary/userlist path would
+	// otherwise resolve against the wrong base and fail to exec.
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
 	dbPath := filepath.Join(dir, engagement.DBFileName)
 	if _, err := os.Stat(dbPath); err != nil {
 		// No collected data yet: bootstrap an empty engagement so the report
