@@ -859,7 +859,7 @@ function loadUtils() {
         '<label>Max results <span class="muted">(per domain)</span></label><input type="number" id="dh-size" value="100" min="1" max="10000">' +
       '</div>' +
       '<div class="u-hint">With an email set, uses the v1 API (GET + HTTP basic auth). Blank email uses the v2 API (POST + <code>Dehashed-Api-Key</code> header). Each domain runs a <code>domain:&lt;domain&gt;</code> query; paste a line-separated list to sweep several tenants at once. Results are <strong>paginated</strong> up to Max results per domain (DeHashed serves at most 10,000 per query).</div>' +
-      '<div class="u-row"><button class="btn" id="dh-btn">Fetch from DeHashed</button><button class="btn" id="dh-csv-btn" style="display:none">Export CSV</button></div>' +
+      '<div class="u-row"><button class="btn" id="dh-btn">Fetch from DeHashed</button><button class="btn" id="dh-csv-btn" style="display:none">Export CSV</button><button class="btn" id="dh-combo-btn" style="display:none">Use pairs in Combo mode</button></div>' +
       '<div id="dh-result"></div>' +
       '<div id="dh-table-wrap" class="dh-table-wrap" style="display:none"><table id="dh-table" class="dh-table"></table></div>' +
       '<div id="dh-userlists" class="u-hint"></div>' +
@@ -962,6 +962,7 @@ function loadUtils() {
   };
 
   document.getElementById('dh-csv-btn').onclick = () => downloadDhCsv();
+  document.getElementById('dh-combo-btn').onclick = () => useDhCombos();
 
   document.getElementById('ts-run-btn').onclick = () => {
     const mode = (document.querySelector('input[name="ts-mode"]:checked') || {}).value || 'spray';
@@ -1101,6 +1102,9 @@ function setUsers(text) {
 // The last DeHashed fetch's full records, kept in memory so Export CSV emits
 // exactly what's shown (and works even without the server-side file link).
 let _dhRecords = [];
+// The last fetch's user:password pairs (records with a plaintext password),
+// ready to load straight into Combo mode.
+let _dhCombos = [];
 
 // splitDomains parses the multi-domain boxes the same way the server does.
 function splitDomains(s) {
@@ -1157,6 +1161,9 @@ function renderDhResult(d) {
   }
   if (d.saved_url) html += ' Userlist: <a href="' + esc(d.saved_url) + '" target="_blank" rel="noopener">' + esc(basename(d.saved_path)) + '</a>.';
   if (d.csv_url) html += ' Saved CSV: <a href="' + esc(d.csv_url) + '" target="_blank" rel="noopener">' + esc(basename(d.csv_path)) + '</a>.';
+  if (d.combo_count) html += ' <strong>' + d.combo_count + '</strong> plaintext <code>user:password</code> pair(s) available' +
+    (d.combos_url ? ' (<a href="' + esc(d.combos_url) + '" target="_blank" rel="noopener">saved</a>)' : '') +
+    ' — click <strong>Use pairs in Combo mode</strong>.';
   html += ' Users loaded below.</div>';
   if (d.per_domain && d.per_domain.length > 1) {
     html += '<div class="dh-perdom">' + d.per_domain.map(pd =>
@@ -1168,6 +1175,12 @@ function renderDhResult(d) {
 
 function renderDhTable(d) {
   _dhRecords = (d && d.records) || [];
+  _dhCombos = (d && d.combos) || [];
+  const comboBtn = document.getElementById('dh-combo-btn');
+  if (comboBtn) {
+    comboBtn.style.display = _dhCombos.length ? '' : 'none';
+    comboBtn.textContent = 'Use ' + _dhCombos.length + ' pair(s) in Combo mode';
+  }
   const wrap = document.getElementById('dh-table-wrap');
   const table = document.getElementById('dh-table');
   const csvBtn = document.getElementById('dh-csv-btn');
@@ -1184,6 +1197,19 @@ function renderDhTable(d) {
   table.innerHTML = html;
   wrap.style.display = '';
   csvBtn.style.display = '';
+}
+
+// useDhCombos loads the DeHashed user:password pairs into the Combo box, flips
+// the run mode to Combo, and scrolls to it.
+function useDhCombos() {
+  if (!_dhCombos.length) return;
+  const box = document.getElementById('ts-combos');
+  if (!box) return;
+  box.value = _dhCombos.join('\n');
+  const radio = document.querySelector('input[name="ts-mode"][value="combo"]');
+  if (radio) { radio.checked = true; radio.dispatchEvent(new Event('change')); }
+  box.dispatchEvent(new Event('input'));
+  box.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 // Build a CSV from the in-memory records and trigger a client-side download.

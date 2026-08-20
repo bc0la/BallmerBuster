@@ -533,7 +533,9 @@ func handleTSDehashed(dir string) http.HandlerFunc {
 
 		emailSet := map[string]bool{}
 		userSet := map[string]bool{}
+		comboSeen := map[string]bool{}
 		var emails, users []string
+		var combos []string // "email:password" pairs from records with a plaintext password
 		var records []dhRecord
 		var per []perDomainResult
 		totalSum, haveTotal := 0, true
@@ -596,6 +598,39 @@ func handleTSDehashed(dir string) http.HandlerFunc {
 					if !domUSeen[v] {
 						domUSeen[v] = true
 						domUsers = append(domUsers, v)
+					}
+				}
+
+				// Build user:password combo pairs from records that carry a
+				// plaintext password (emails preferred as UPNs, else usernames).
+				// These feed TREVORspray's -up so leaked creds are tried as exact
+				// pairs rather than sprayed.
+				if pwds := asStrings(e["password"]); len(pwds) > 0 {
+					ids := asStrings(e["email"])
+					lower := true
+					if len(ids) == 0 {
+						ids = asStrings(e["username"])
+						lower = false
+					}
+					for _, id := range ids {
+						id = strings.TrimSpace(id)
+						if lower {
+							id = strings.ToLower(id)
+						}
+						if id == "" {
+							continue
+						}
+						for _, pw := range pwds {
+							pw = strings.TrimSpace(pw)
+							if pw == "" {
+								continue
+							}
+							pair := id + ":" + pw
+							if !comboSeen[pair] {
+								comboSeen[pair] = true
+								combos = append(combos, pair)
+							}
+						}
 					}
 				}
 			}
@@ -661,6 +696,17 @@ func handleTSDehashed(dir string) http.HandlerFunc {
 			}
 		}
 
+		// Persist the plaintext credential pairs for combo (-up) runs.
+		combosPath, combosURL := "", ""
+		if len(combos) > 0 {
+			combosPath = filepath.Join(ulDir, base+"-dehashed.combos.txt")
+			if err := os.WriteFile(combosPath, []byte(strings.Join(combos, "\n")+"\n"), 0o644); err == nil {
+				combosURL = rawURLFor(dir, combosPath)
+			} else {
+				combosPath = ""
+			}
+		}
+
 		var totalOut any
 		if haveTotal {
 			totalOut = totalSum
@@ -674,6 +720,10 @@ func handleTSDehashed(dir string) http.HandlerFunc {
 			"usernames":    len(users),
 			"records":      records,
 			"record_count": len(records),
+			"combos":       combos,
+			"combo_count":  len(combos),
+			"combos_path":  combosPath,
+			"combos_url":   combosURL,
 			"total":        totalOut,
 			"domains":      domains,
 			"per_domain":   per,

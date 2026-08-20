@@ -124,6 +124,12 @@ written to `<engagement>/trevorspray/userlists/<name>-dehashed.csv` (linked as
 the browser. Handy for credential-stuffing the same passwords against other
 services on the engagement.
 
+**Straight into Combo mode.** Every record with a **plaintext** password also
+becomes an `email:password` pair (saved to `<name>-dehashed.combos.txt`).
+Click **Use pairs in Combo mode** to load them into the run form's Combo box —
+this validates the *actual leaked credentials* as exact pairs via `-up`, not a
+spray. See the Combo mode note below.
+
 ### 3 · Recon / Spray / Test
 
 Pick a **mode**:
@@ -139,12 +145,14 @@ Pick a **mode**:
   max-attempts passwords.
 - **Test single user** — uses only the first user and forces exit-on-first-
   success; for validating one credential / checking MFA on one account.
-- **Combo (user:pass)** — paste your own `user:password` pairs (one per line);
-  each is tried as an exact pair via TREVORspray's `-up`, with **no**
-  user×password cross-product. Pairs are still capped to **max-attempts per
-  username** (extras dropped with a warning) to protect against lockouts. Use
-  this when you already have specific credentials to validate (e.g. reused
-  passwords from the DeHashed table) rather than spraying a shared password.
+- **Combo (user:pass)** — try exact `user:password` pairs via TREVORspray's
+  `-up`, with **no** user×password cross-product. Two ways to fill it: paste
+  your own pairs (one per line), or click **Use pairs in Combo mode** after a
+  DeHashed fetch to auto-load every record that has a **plaintext** password as
+  `email:password` (records with only a hash are skipped). Pairs are still
+  capped to **max-attempts per username** (extras dropped with a warning) to
+  protect against lockouts. This is the "validate the actual leaked creds"
+  workflow — as opposed to spraying one shared password across everyone.
 
 Key fields:
 
@@ -185,6 +193,7 @@ home/.trevorspray/             # per-engagement TREVORspray state + cumulative t
 userlists/<domain>-dehashed.txt    # per-domain userlist
 userlists/combined-dehashed.txt    # all domains merged (multi-domain fetch)
 userlists/<name>-dehashed.csv      # full exportable credential table
+userlists/<name>-dehashed.combos.txt  # email:password pairs (plaintext) for -up
 runs/<mode>-<timestamp>/
     users.txt  passwords.txt  trevorspray.log
 ```
