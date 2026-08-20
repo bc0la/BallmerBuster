@@ -124,11 +124,13 @@ written to `<engagement>/trevorspray/userlists/<name>-dehashed.csv` (linked as
 the browser. Handy for credential-stuffing the same passwords against other
 services on the engagement.
 
-**Straight into Combo mode.** Every record with a **plaintext** password also
-becomes an `email:password` pair (saved to `<name>-dehashed.combos.txt`).
-Click **Use pairs in Combo mode** to load them into the run form's Combo box —
-this validates the *actual leaked credentials* as exact pairs via `-up`, not a
-spray. See the Combo mode note below.
+**Straight into Combo mode (default).** Every record with a **plaintext**
+password also becomes an `email:password` pair (saved to
+`<name>-dehashed.combos.txt`). After a fetch these are **auto-loaded into the
+run form's Combo box and the mode is switched to Combo** — so by default you
+validate the *actual leaked credentials* as exact pairs via `-up` (each user
+tried only with its own password), not a spray. The **Use pairs in Combo mode**
+button re-applies them if you've navigated away. See the Combo mode note below.
 
 ### 3 · Recon / Spray / Test
 
@@ -145,14 +147,14 @@ Pick a **mode**:
   max-attempts passwords.
 - **Test single user** — uses only the first user and forces exit-on-first-
   success; for validating one credential / checking MFA on one account.
-- **Combo (user:pass)** — try exact `user:password` pairs via TREVORspray's
-  `-up`, with **no** user×password cross-product. Two ways to fill it: paste
-  your own pairs (one per line), or click **Use pairs in Combo mode** after a
-  DeHashed fetch to auto-load every record that has a **plaintext** password as
-  `email:password` (records with only a hash are skipped). Pairs are still
-  capped to **max-attempts per username** (extras dropped with a warning) to
-  protect against lockouts. This is the "validate the actual leaked creds"
-  workflow — as opposed to spraying one shared password across everyone.
+- **Combo (user:pass)** *(default)* — try exact `user:password` pairs via
+  TREVORspray's `-up`, with **no** user×password cross-product. A DeHashed fetch
+  **auto-fills this** with every record that has a **plaintext** password as
+  `email:password` (hash-only records skipped) and selects Combo mode; you can
+  also paste your own pairs. Pairs are capped to **max-attempts per username**
+  (extras dropped with a warning) to protect against lockouts. This is the
+  "validate the actual leaked creds" workflow — each user tried only with its
+  own password, as opposed to spraying one shared password across everyone.
 
 Key fields:
 

@@ -870,9 +870,9 @@ function loadUtils() {
       '<h3>3 · Recon / spray / test</h3>' +
       '<div class="u-row">' +
         '<label><input type="radio" name="ts-mode" value="recon"> Recon (enumerate tenant)</label>' +
-        '<label><input type="radio" name="ts-mode" value="spray" checked> Password spray</label>' +
+        '<label><input type="radio" name="ts-mode" value="spray"> Password spray</label>' +
         '<label><input type="radio" name="ts-mode" value="test"> Test single user</label>' +
-        '<label><input type="radio" name="ts-mode" value="combo"> Combo (user:pass)</label>' +
+        '<label><input type="radio" name="ts-mode" value="combo" checked> Combo (user:pass)</label>' +
       '</div>' +
       '<div class="u-grid">' +
         '<label>Module</label><select id="ts-module">' +
@@ -952,6 +952,8 @@ function loadUtils() {
       renderDhResult(d);
       renderDhTable(d);
       if (d.users && d.users.length) setUsers(d.users.join('\n'));
+      // Leaked creds default to Combo (each user with its own password).
+      if (d.combo_count) useDhCombos(false);
       // Prefill the recon domain box with the queried tenants if it's empty.
       const doms = (d.domains && d.domains.length) ? d.domains : splitDomains(document.getElementById('dh-domain').value);
       if (doms.length && !document.getElementById('ts-domain').value.trim()) document.getElementById('ts-domain').value = doms.join('\n');
@@ -962,7 +964,7 @@ function loadUtils() {
   };
 
   document.getElementById('dh-csv-btn').onclick = () => downloadDhCsv();
-  document.getElementById('dh-combo-btn').onclick = () => useDhCombos();
+  document.getElementById('dh-combo-btn').onclick = () => useDhCombos(true);
 
   document.getElementById('ts-run-btn').onclick = () => {
     const mode = (document.querySelector('input[name="ts-mode"]:checked') || {}).value || 'spray';
@@ -1161,9 +1163,9 @@ function renderDhResult(d) {
   }
   if (d.saved_url) html += ' Userlist: <a href="' + esc(d.saved_url) + '" target="_blank" rel="noopener">' + esc(basename(d.saved_path)) + '</a>.';
   if (d.csv_url) html += ' Saved CSV: <a href="' + esc(d.csv_url) + '" target="_blank" rel="noopener">' + esc(basename(d.csv_path)) + '</a>.';
-  if (d.combo_count) html += ' <strong>' + d.combo_count + '</strong> plaintext <code>user:password</code> pair(s) available' +
+  if (d.combo_count) html += ' <strong>' + d.combo_count + '</strong> plaintext <code>user:password</code> pair(s)' +
     (d.combos_url ? ' (<a href="' + esc(d.combos_url) + '" target="_blank" rel="noopener">saved</a>)' : '') +
-    ' — click <strong>Use pairs in Combo mode</strong>.';
+    ' → loaded into <strong>Combo mode</strong> (each user with its own password).';
   html += ' Users loaded below.</div>';
   if (d.per_domain && d.per_domain.length > 1) {
     html += '<div class="dh-perdom">' + d.per_domain.map(pd =>
@@ -1199,9 +1201,10 @@ function renderDhTable(d) {
   csvBtn.style.display = '';
 }
 
-// useDhCombos loads the DeHashed user:password pairs into the Combo box, flips
-// the run mode to Combo, and scrolls to it.
-function useDhCombos() {
+// useDhCombos loads the DeHashed user:password pairs into the Combo box and
+// flips the run mode to Combo (the default for leaked creds). Pass scroll=true
+// to also scroll the box into view (on an explicit button click).
+function useDhCombos(scroll) {
   if (!_dhCombos.length) return;
   const box = document.getElementById('ts-combos');
   if (!box) return;
@@ -1209,7 +1212,7 @@ function useDhCombos() {
   const radio = document.querySelector('input[name="ts-mode"][value="combo"]');
   if (radio) { radio.checked = true; radio.dispatchEvent(new Event('change')); }
   box.dispatchEvent(new Event('input'));
-  box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (scroll) box.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 // Build a CSV from the in-memory records and trigger a client-side download.
