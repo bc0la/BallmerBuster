@@ -351,9 +351,15 @@ func (r dhRecord) row() []string {
 	return []string{r.Domain, r.Email, r.Username, r.Password, r.HashedPassword, r.Name, r.Database, r.IPAddress, r.Phone}
 }
 
-// dehashedDo runs a single DeHashed search (v1 or v2 depending on whether an
-// email is set) and returns the raw entries plus the reported total.
-func dehashedDo(ctx context.Context, req dehashedReq, query string) ([]map[string]any, any, error) {
+// DeHashed serves at most this many records per query (the API's pagination
+// depth cap) and at most this many per page.
+const dehashedMaxPerPage = 10000
+const dehashedHardCap = 10000
+
+// dehashedPage fetches one page of a DeHashed search (v1 or v2 depending on
+// whether an email is set) and returns that page's entries plus the reported
+// total match count. page is 1-indexed.
+func dehashedPage(ctx context.Context, req dehashedReq, query string, page, size int) ([]map[string]any, any, error) {
 	endpoint := strings.TrimSpace(req.Endpoint)
 	var httpReq *http.Request
 	var err error
@@ -366,7 +372,8 @@ func dehashedDo(ctx context.Context, req dehashedReq, query string) ([]map[strin
 		if err == nil {
 			q := httpReq.URL.Query()
 			q.Set("query", query)
-			q.Set("size", fmt.Sprintf("%d", req.Size))
+			q.Set("size", fmt.Sprintf("%d", size))
+			q.Set("page", fmt.Sprintf("%d", page))
 			httpReq.URL.RawQuery = q.Encode()
 			httpReq.SetBasicAuth(req.Email, req.APIKey)
 		}
@@ -375,7 +382,7 @@ func dehashedDo(ctx context.Context, req dehashedReq, query string) ([]map[strin
 		if endpoint == "" {
 			endpoint = "https://api.dehashed.com/v2/search"
 		}
-		body, _ := json.Marshal(map[string]any{"query": query, "size": req.Size, "page": 1})
+		body, _ := json.Marshal(map[string]any{"query": query, "size": size, "page": page})
 		httpReq, err = http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
 		if err == nil {
 			httpReq.Header.Set("Content-Type", "application/json")
@@ -392,7 +399,7 @@ func dehashedDo(ctx context.Context, req dehashedReq, query string) ([]map[strin
 		return nil, nil, fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024*1024))
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024*1024))
 	if resp.StatusCode != http.StatusOK {
 		return nil, nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
 	}
@@ -404,6 +411,74 @@ func dehashedDo(ctx context.Context, req dehashedReq, query string) ([]map[strin
 		return nil, nil, fmt.Errorf("could not parse response: %w", err)
 	}
 	return parsed.Entries, parsed.Total, nil
+}
+
+// dehashedCollect pages through a DeHashed search, accumulating entries until it
+// has gathered `budget` records, exhausted the result set, or hit the API's
+// pagination depth cap. It returns the collected entries and the total match
+// count the API reports (which may exceed len(entries) when the budget or cap
+// limits how many were fetched).
+func dehashedCollect(ctx context.Context, req dehashedReq, query string, budget int) ([]map[string]any, any, error) {
+	if budget <= 0 {
+		budget = 100
+	}
+	if budget > dehashedHardCap {
+		budget = dehashedHardCap
+	}
+	pageSize := budget
+	if pageSize > dehashedMaxPerPage {
+		pageSize = dehashedMaxPerPage
+	}
+
+	var all []map[string]any
+	var total any
+	// The page size stays constant across pages: DeHashed's pagination is
+	// offset-based (offset = (page-1)*size), so varying it would overlap or skip
+	// records.
+	for page := 1; page <= 100; page++ {
+		entries, tot, err := dehashedPage(ctx, req, query, page, pageSize)
+		if err != nil {
+			// A first-page failure is fatal (bad key/endpoint/query); a later
+			// page failing is best-effort — keep what we already gathered.
+			if page == 1 {
+				return nil, nil, err
+			}
+			break
+		}
+		if page == 1 {
+			total = tot
+		}
+		all = append(all, entries...)
+
+		if len(all) >= budget { // hit the caller's budget
+			all = all[:budget]
+			break
+		}
+		if len(entries) == 0 { // nothing more to fetch
+			break
+		}
+		if n, ok := toInt(total); ok {
+			if len(all) >= n { // gathered every match the API reports
+				break
+			}
+		} else if len(entries) < pageSize {
+			// No trustworthy total: a short page is our best last-page signal.
+			break
+		}
+		if page*pageSize >= dehashedHardCap { // API won't paginate past this
+			break
+		}
+		if ctx.Err() != nil { // client gone / deadline
+			break
+		}
+		// Respect DeHashed's rate limit between pages.
+		select {
+		case <-ctx.Done():
+			return all, total, nil
+		case <-time.After(150 * time.Millisecond):
+		}
+	}
+	return all, total, nil
 }
 
 // perDomainResult summarizes what one domain's search yielded.
@@ -426,8 +501,11 @@ func handleTSDehashed(dir string) http.HandlerFunc {
 			http.Error(w, "api_key is required", http.StatusBadRequest)
 			return
 		}
-		if req.Size <= 0 || req.Size > 10000 {
+		if req.Size <= 0 {
 			req.Size = 100
+		}
+		if req.Size > dehashedHardCap {
+			req.Size = dehashedHardCap
 		}
 
 		// Build the searches to run. A pasted list of domains → one
@@ -448,8 +526,9 @@ func handleTSDehashed(dir string) http.HandlerFunc {
 			return
 		}
 
-		// A generous overall budget; per-request client timeout is 45s each.
-		ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
+		// A generous overall budget across all domains and their pages;
+		// per-request client timeout is 45s each.
+		ctx, cancel := context.WithTimeout(r.Context(), 300*time.Second)
 		defer cancel()
 
 		emailSet := map[string]bool{}
@@ -463,7 +542,7 @@ func handleTSDehashed(dir string) http.HandlerFunc {
 		_ = os.MkdirAll(ulDir, 0o755)
 
 		for _, s := range searches {
-			entries, total, err := dehashedDo(ctx, req, s.query)
+			entries, total, err := dehashedCollect(ctx, req, s.query, req.Size)
 			if err != nil {
 				// One search of many: record the error and keep going so a
 				// single bad domain doesn't sink the whole batch. A lone

@@ -106,7 +106,7 @@ The **Run** button stays disabled until this succeeds.
 | **API key** | Your DeHashed key (**show** toggle reveals it). |
 | **Email** | Blank → **v2** (`Dehashed-Api-Key` header). Set it → **v1** (GET + HTTP basic auth `email:key`). |
 | **Domain(s) / tenant** | e.g. `contoso.com` → queries `domain:contoso.com`. Paste a **line-separated list** to sweep several tenants in one shot. |
-| **Max results** | Cap on returned records **per domain** (default 100). |
+| **Max results** | Records to fetch **per domain** (default 100). The server **paginates** the DeHashed API to gather up to this many; DeHashed serves at most 10,000 per query. If a tenant has more matches than you fetched, the result banner warns how many more are available so you can raise this. |
 
 **Fetch from DeHashed** dedupes emails (preferred as O365 UPNs) and usernames,
 saves them to `<engagement>/trevorspray/userlists/<domain>-dehashed.txt`, and

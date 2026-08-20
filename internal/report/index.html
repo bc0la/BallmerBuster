@@ -858,7 +858,7 @@ function loadUtils() {
         '<label>Domain(s) / tenant</label><textarea id="dh-domain" rows="2" placeholder="contoso.com&#10;fabrikam.com  ← one per line for multiple tenants"></textarea>' +
         '<label>Max results <span class="muted">(per domain)</span></label><input type="number" id="dh-size" value="100" min="1" max="10000">' +
       '</div>' +
-      '<div class="u-hint">With an email set, uses the v1 API (GET + HTTP basic auth). Blank email uses the v2 API (POST + <code>Dehashed-Api-Key</code> header). Each domain runs a <code>domain:&lt;domain&gt;</code> query; paste a line-separated list to sweep several tenants at once.</div>' +
+      '<div class="u-hint">With an email set, uses the v1 API (GET + HTTP basic auth). Blank email uses the v2 API (POST + <code>Dehashed-Api-Key</code> header). Each domain runs a <code>domain:&lt;domain&gt;</code> query; paste a line-separated list to sweep several tenants at once. Results are <strong>paginated</strong> up to Max results per domain (DeHashed serves at most 10,000 per query).</div>' +
       '<div class="u-row"><button class="btn" id="dh-btn">Fetch from DeHashed</button><button class="btn" id="dh-csv-btn" style="display:none">Export CSV</button></div>' +
       '<div id="dh-result"></div>' +
       '<div id="dh-table-wrap" class="dh-table-wrap" style="display:none"><table id="dh-table" class="dh-table"></table></div>' +
@@ -1096,6 +1096,12 @@ function renderDhResult(d) {
   let html = '<div class="u-hint">Found <strong>' + (d.record_count || 0) + '</strong> record(s), <strong>' + (d.count || 0) +
     '</strong> unique ' + esc(d.kind || 'user') + '(s) (' + (d.emails || 0) + ' emails, ' + (d.usernames || 0) + ' usernames' +
     (d.total != null ? ', ' + esc(String(d.total)) + ' total matches' : '') + ').';
+  // Flag when the API reports more matches than we fetched, so the operator
+  // knows to raise Max results (subject to DeHashed's 10k/query cap).
+  const totalNum = Number(d.total);
+  if (Number.isFinite(totalNum) && totalNum > (d.record_count || 0)) {
+    html += ' <span class="no">⚠ ' + (totalNum - d.record_count) + ' more available — raise Max results to fetch them.</span>';
+  }
   if (d.saved_url) html += ' Userlist: <a href="' + esc(d.saved_url) + '" target="_blank" rel="noopener">' + esc(basename(d.saved_path)) + '</a>.';
   if (d.csv_url) html += ' Saved CSV: <a href="' + esc(d.csv_url) + '" target="_blank" rel="noopener">' + esc(basename(d.csv_path)) + '</a>.';
   html += ' Users loaded below.</div>';
