@@ -54,7 +54,16 @@
   .badge.ok { background: #16301a; color: #9cc99c; border-color: #2a5a2a; }
   .badge.no { background: #301a16; color: #cc9c9c; border-color: #5a2a2a; }
   .u-tag { display: inline-block; background: #24425a; color: #cfe; border: 1px solid #3a6d99; border-radius: 3px; padding: 1px 6px; font-size: 12px; margin: 2px; }
+  .u-tag.bad { background: #3a2018; color: #f2b8a8; border-color: #7a3a2a; }
   .u-tag button { background: none; border: none; color: #9bd; cursor: pointer; font: inherit; padding: 0; }
+  .dh-perdom { margin: 4px 0; }
+  .dh-table-wrap { max-height: 46vh; overflow: auto; border: 1px solid #222; border-radius: 5px; margin: 8px 0; }
+  .dh-table { border-collapse: collapse; width: 100%; font-size: 12px; font-family: monospace; }
+  .dh-table caption.dh-cap { caption-side: top; text-align: left; color: #ff9a3c; font-family: inherit; font-size: 12px; padding: 4px 6px; }
+  .dh-table th { position: sticky; top: 0; background: #1b1b1b; color: #cbd; text-align: left; padding: 5px 8px; border-bottom: 1px solid #333; white-space: nowrap; z-index: 1; }
+  .dh-table td { padding: 4px 8px; border-bottom: 1px solid #191919; color: #ddd; vertical-align: top; word-break: break-all; max-width: 320px; }
+  .dh-table tbody tr:nth-child(even) { background: #121212; }
+  .dh-table tbody tr:hover { background: #1a2530; }
   .term { border: 1px solid #222; border-radius: 5px; margin-top: 8px; overflow: hidden; }
   .term:empty { display: none; }
   .term-bar { display: flex; align-items: center; gap: 8px; background: #141414; border-bottom: 1px solid #222; padding: 5px 8px; font-size: 12px; }
@@ -846,12 +855,13 @@ function loadUtils() {
         '<label>API endpoint</label><input type="text" id="dh-endpoint" placeholder="https://api.dehashed.com/v2/search">' +
         '<label>API key</label><span style="display:flex;gap:6px"><input type="password" id="dh-key" placeholder="DeHashed API key" autocomplete="off"><button type="button" class="btn" id="dh-key-toggle" style="padding:4px 10px;flex:none">show</button></span>' +
         '<label>Email <span class="muted">(v1 only)</span></label><input type="text" id="dh-email" placeholder="leave blank for v2 (Dehashed-Api-Key header)" autocomplete="off">' +
-        '<label>Domain / tenant</label><input type="text" id="dh-domain" placeholder="contoso.com">' +
-        '<label>Max results</label><input type="number" id="dh-size" value="100" min="1" max="10000">' +
+        '<label>Domain(s) / tenant</label><textarea id="dh-domain" rows="2" placeholder="contoso.com&#10;fabrikam.com  ← one per line for multiple tenants"></textarea>' +
+        '<label>Max results <span class="muted">(per domain)</span></label><input type="number" id="dh-size" value="100" min="1" max="10000">' +
       '</div>' +
-      '<div class="u-hint">With an email set, uses the v1 API (GET + HTTP basic auth). Blank email uses the v2 API (POST + <code>Dehashed-Api-Key</code> header). Query is <code>domain:&lt;domain&gt;</code>.</div>' +
-      '<div class="u-row"><button class="btn" id="dh-btn">Fetch users from DeHashed</button></div>' +
+      '<div class="u-hint">With an email set, uses the v1 API (GET + HTTP basic auth). Blank email uses the v2 API (POST + <code>Dehashed-Api-Key</code> header). Each domain runs a <code>domain:&lt;domain&gt;</code> query; paste a line-separated list to sweep several tenants at once.</div>' +
+      '<div class="u-row"><button class="btn" id="dh-btn">Fetch from DeHashed</button><button class="btn" id="dh-csv-btn" style="display:none">Export CSV</button></div>' +
       '<div id="dh-result"></div>' +
+      '<div id="dh-table-wrap" class="dh-table-wrap" style="display:none"><table id="dh-table" class="dh-table"></table></div>' +
       '<div id="dh-userlists" class="u-hint"></div>' +
     '</div>' +
 
@@ -867,7 +877,7 @@ function loadUtils() {
         '<label>Module</label><select id="ts-module">' +
           ['msol','owa','adfs','okta','auth0','anyconnect','jumpcloud','officehome'].map(m => '<option value="' + m + '"' + (m === 'msol' ? ' selected' : '') + '>' + m + '</option>').join('') +
         '</select>' +
-        '<label>Tenant / domain</label><input type="text" id="ts-domain" placeholder="contoso.com">' +
+        '<label>Tenant / domain <span class="muted">(recon: one per line)</span></label><textarea id="ts-domain" rows="2" placeholder="contoso.com"></textarea>' +
         '<label>URL override <span class="muted">(opt)</span></label><input type="text" id="ts-url" placeholder="e.g. https://login.microsoftonline.com/&lt;tenant&gt;/oauth2/token">' +
         '<label>User-enum <span class="muted">(recon)</span></label><select id="ts-userenum"><option value="">(interactive / default)</option><option value="onedrive">onedrive</option><option value="seamless_sso">seamless_sso</option><option value="teams_photo">teams_photo</option></select>' +
       '</div>' +
@@ -923,25 +933,25 @@ function loadUtils() {
           endpoint: document.getElementById('dh-endpoint').value.trim(),
           api_key: document.getElementById('dh-key').value,
           email: document.getElementById('dh-email').value.trim(),
-          domain: document.getElementById('dh-domain').value.trim(),
+          domain: document.getElementById('dh-domain').value,
           size: parseInt(document.getElementById('dh-size').value, 10) || 100,
         }),
       });
-      if (!resp.ok) { out.innerHTML = '<span class="no">' + esc(await resp.text()) + '</span>'; return; }
+      if (!resp.ok) { out.innerHTML = '<span class="no">' + esc(await resp.text()) + '</span>'; renderDhTable(null); return; }
       const d = await resp.json();
-      if (!d.count) { out.innerHTML = '<span class="no">no users found</span>'; return; }
-      out.innerHTML = '<div class="u-hint">Found <strong>' + d.count + '</strong> ' + esc(d.kind) + '(s) ' +
-        '(' + d.emails + ' emails, ' + d.usernames + ' usernames' + (d.total != null ? ', total matches ' + esc(String(d.total)) : '') + ')' +
-        (d.saved_path ? ' — saved to <code>' + esc(d.saved_path) + '</code>' : '') + '. Loaded into the users box below.</div>' +
-        '<div>' + d.users.slice(0, 40).map(u => '<span class="u-tag">' + esc(u) + '</span>').join('') + (d.users.length > 40 ? ' <span class="muted">+' + (d.users.length - 40) + ' more</span>' : '') + '</div>';
-      setUsers(d.users.join('\n'));
-      const dom = document.getElementById('dh-domain').value.trim();
-      if (dom && !document.getElementById('ts-domain').value.trim()) document.getElementById('ts-domain').value = dom;
+      renderDhResult(d);
+      renderDhTable(d);
+      if (d.users && d.users.length) setUsers(d.users.join('\n'));
+      // Prefill the recon domain box with the queried tenants if it's empty.
+      const doms = (d.domains && d.domains.length) ? d.domains : splitDomains(document.getElementById('dh-domain').value);
+      if (doms.length && !document.getElementById('ts-domain').value.trim()) document.getElementById('ts-domain').value = doms.join('\n');
       loadUserlists();
     } catch (e) {
-      out.innerHTML = '<span class="no">' + esc(String(e)) + '</span>';
+      out.innerHTML = '<span class="no">' + esc(String(e)) + '</span>'; renderDhTable(null);
     } finally { btn.disabled = false; }
   };
+
+  document.getElementById('dh-csv-btn').onclick = () => downloadDhCsv();
 
   document.getElementById('ts-run-btn').onclick = () => {
     const mode = (document.querySelector('input[name="ts-mode"]:checked') || {}).value || 'spray';
@@ -952,7 +962,8 @@ function loadUtils() {
       const np = countLines(document.getElementById('ts-passwords').value);
       if (!nu || !np) { alert('Add at least one user and one password.'); return; }
       const perUser = Math.min(np, parseInt(document.getElementById('ts-max').value, 10) || 2);
-      const target = document.getElementById('ts-domain').value.trim() || document.getElementById('ts-url').value.trim() || 'the configured endpoint';
+      const doms = splitDomains(document.getElementById('ts-domain').value);
+      const target = (doms.length ? doms.join(', ') : '') || document.getElementById('ts-url').value.trim() || 'the configured endpoint';
       const total = (mode === 'test' ? 1 : nu) * perUser;
       if (!confirm('Authorized testing only — confirm you have permission to spray this tenant.\n\n' +
         (mode === 'test' ? '1 test user' : nu + ' users') + ' × ' + perUser + ' password(s) = ' + total +
@@ -964,7 +975,7 @@ function loadUtils() {
     const body = {
       mode,
       module: document.getElementById('ts-module').value,
-      domain: document.getElementById('ts-domain').value.trim(),
+      domain: document.getElementById('ts-domain').value,
       url: document.getElementById('ts-url').value.trim(),
       user_enum: document.getElementById('ts-userenum').value,
       users: [document.getElementById('ts-users').value],
@@ -1058,6 +1069,76 @@ function setUsers(text) {
   if (!el) return;
   el.value = text;
   el.dispatchEvent(new Event('input'));
+}
+
+// ---- DeHashed credential table + export ----------------------------------
+// The last DeHashed fetch's full records, kept in memory so Export CSV emits
+// exactly what's shown (and works even without the server-side file link).
+let _dhRecords = [];
+
+// splitDomains parses the multi-domain boxes the same way the server does.
+function splitDomains(s) {
+  return (s || '').split(/[\s,;]+/).map(x => x.trim().toLowerCase()).filter(Boolean)
+    .filter((v, i, a) => a.indexOf(v) === i);
+}
+
+function basename(p) { return (p || '').split('/').pop(); }
+
+// Columns rendered in the credential table and CSV (key → header label).
+const DH_COLS = [
+  ['domain', 'Domain'], ['email', 'Email'], ['username', 'Username'], ['password', 'Password'],
+  ['hashed_password', 'Hash'], ['name', 'Name'], ['database_name', 'Database'], ['ip_address', 'IP'], ['phone', 'Phone'],
+];
+
+function renderDhResult(d) {
+  const out = document.getElementById('dh-result');
+  if (!d || (!d.count && !d.record_count)) { out.innerHTML = '<span class="no">no records found</span>'; return; }
+  let html = '<div class="u-hint">Found <strong>' + (d.record_count || 0) + '</strong> record(s), <strong>' + (d.count || 0) +
+    '</strong> unique ' + esc(d.kind || 'user') + '(s) (' + (d.emails || 0) + ' emails, ' + (d.usernames || 0) + ' usernames' +
+    (d.total != null ? ', ' + esc(String(d.total)) + ' total matches' : '') + ').';
+  if (d.saved_url) html += ' Userlist: <a href="' + esc(d.saved_url) + '" target="_blank" rel="noopener">' + esc(basename(d.saved_path)) + '</a>.';
+  if (d.csv_url) html += ' Saved CSV: <a href="' + esc(d.csv_url) + '" target="_blank" rel="noopener">' + esc(basename(d.csv_path)) + '</a>.';
+  html += ' Users loaded below.</div>';
+  if (d.per_domain && d.per_domain.length > 1) {
+    html += '<div class="dh-perdom">' + d.per_domain.map(pd =>
+      '<span class="u-tag' + (pd.error ? ' bad' : '') + '">' + esc(pd.domain || '(query)') + ': ' +
+      (pd.error ? esc(pd.error) : (pd.records + ' rec · ' + pd.users + ' user' + (pd.users === 1 ? '' : 's'))) + '</span>').join(' ') + '</div>';
+  }
+  out.innerHTML = html;
+}
+
+function renderDhTable(d) {
+  _dhRecords = (d && d.records) || [];
+  const wrap = document.getElementById('dh-table-wrap');
+  const table = document.getElementById('dh-table');
+  const csvBtn = document.getElementById('dh-csv-btn');
+  if (!_dhRecords.length) { wrap.style.display = 'none'; table.innerHTML = ''; csvBtn.style.display = 'none'; return; }
+  // Only show columns that carry data in this result set.
+  const cols = DH_COLS.filter(([k]) => _dhRecords.some(r => (r[k] || '') !== ''));
+  const cap = 1000;
+  const rows = _dhRecords.slice(0, cap);
+  let html = '';
+  if (_dhRecords.length > cap) html += '<caption class="dh-cap">showing first ' + cap + ' of ' + _dhRecords.length + ' rows — Export CSV for all</caption>';
+  html += '<thead><tr>' + cols.map(([, label]) => '<th>' + esc(label) + '</th>').join('') + '</tr></thead><tbody>';
+  html += rows.map(r => '<tr>' + cols.map(([k]) => '<td>' + esc(r[k] || '') + '</td>').join('') + '</tr>').join('');
+  html += '</tbody>';
+  table.innerHTML = html;
+  wrap.style.display = '';
+  csvBtn.style.display = '';
+}
+
+// Build a CSV from the in-memory records and trigger a client-side download.
+function downloadDhCsv() {
+  if (!_dhRecords.length) return;
+  const escCell = v => { v = (v == null ? '' : String(v)); return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
+  const lines = [DH_COLS.map(([, label]) => label).join(',')];
+  for (const r of _dhRecords) lines.push(DH_COLS.map(([k]) => escCell(r[k])).join(','));
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'dehashed-export.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
 // loadUserlists shows the userlist files already saved under the engagement,

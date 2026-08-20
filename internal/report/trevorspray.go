@@ -3,6 +3,7 @@ package report
 import (
 	"bufio"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -68,6 +70,15 @@ func tsPathsFor(dir string) tsPaths {
 func fileExists(p string) bool {
 	st, err := os.Stat(p)
 	return err == nil && !st.IsDir()
+}
+
+// rawURLFor maps an absolute path under the engagement dir to the /raw/ URL the
+// browser fetches; falls back to the absolute path if it isn't under dir.
+func rawURLFor(dir, abs string) string {
+	if rel, err := filepath.Rel(dir, abs); err == nil && !strings.HasPrefix(rel, "..") {
+		return "/raw/" + filepath.ToSlash(rel)
+	}
+	return abs
 }
 
 // --- Status -----------------------------------------------------------------
@@ -254,9 +265,9 @@ func handleTSInstall(dir string) http.HandlerFunc {
 type dehashedReq struct {
 	Endpoint string `json:"endpoint"`
 	APIKey   string `json:"api_key"`
-	Email    string `json:"email"` // set → v1 GET + HTTP basic auth; empty → v2 POST + header
-	Domain   string `json:"domain"`
-	Query    string `json:"query"` // optional; overrides the default `domain:<domain>`
+	Email    string `json:"email"`  // set → v1 GET + HTTP basic auth; empty → v2 POST + header
+	Domain   string `json:"domain"` // one or more domains (newline/comma/space separated)
+	Query    string `json:"query"`  // optional; used verbatim when no domains are given
 	Size     int    `json:"size"`
 }
 
@@ -282,6 +293,128 @@ func asStrings(v any) []string {
 	return nil
 }
 
+// joinField renders a possibly-multi-valued DeHashed field as one cell.
+func joinField(e map[string]any, key string) string {
+	return strings.Join(asStrings(e[key]), "; ")
+}
+
+// splitList parses a free-form list (newline/comma/semicolon/whitespace
+// separated) into a deduped, lowercased slice — used for the domain box so an
+// operator can paste many tenants at once.
+func splitList(s string) []string {
+	fields := strings.FieldsFunc(s, func(r rune) bool {
+		return r == '\n' || r == '\r' || r == '\t' || r == ',' || r == ';' || r == ' '
+	})
+	seen := map[string]bool{}
+	var out []string
+	for _, f := range fields {
+		f = strings.ToLower(strings.TrimSpace(f))
+		if f != "" && !seen[f] {
+			seen[f] = true
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// toInt coerces a JSON number/string (DeHashed's `total`) to an int.
+func toInt(v any) (int, bool) {
+	switch t := v.(type) {
+	case float64:
+		return int(t), true
+	case int:
+		return t, true
+	case string:
+		if n, err := strconv.Atoi(strings.TrimSpace(t)); err == nil {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+// dhRecord is one exportable credential row surfaced to the browser and CSV.
+type dhRecord struct {
+	Domain         string `json:"domain"`
+	Email          string `json:"email"`
+	Username       string `json:"username"`
+	Password       string `json:"password"`
+	HashedPassword string `json:"hashed_password"`
+	Name           string `json:"name"`
+	Database       string `json:"database_name"`
+	IPAddress      string `json:"ip_address"`
+	Phone          string `json:"phone"`
+}
+
+var dhCSVHeader = []string{"domain", "email", "username", "password", "hashed_password", "name", "database_name", "ip_address", "phone"}
+
+func (r dhRecord) row() []string {
+	return []string{r.Domain, r.Email, r.Username, r.Password, r.HashedPassword, r.Name, r.Database, r.IPAddress, r.Phone}
+}
+
+// dehashedDo runs a single DeHashed search (v1 or v2 depending on whether an
+// email is set) and returns the raw entries plus the reported total.
+func dehashedDo(ctx context.Context, req dehashedReq, query string) ([]map[string]any, any, error) {
+	endpoint := strings.TrimSpace(req.Endpoint)
+	var httpReq *http.Request
+	var err error
+	if req.Email != "" {
+		// DeHashed v1: GET with HTTP basic auth (email:apikey).
+		if endpoint == "" {
+			endpoint = "https://api.dehashed.com/search"
+		}
+		httpReq, err = http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err == nil {
+			q := httpReq.URL.Query()
+			q.Set("query", query)
+			q.Set("size", fmt.Sprintf("%d", req.Size))
+			httpReq.URL.RawQuery = q.Encode()
+			httpReq.SetBasicAuth(req.Email, req.APIKey)
+		}
+	} else {
+		// DeHashed v2: POST JSON with the Dehashed-Api-Key header.
+		if endpoint == "" {
+			endpoint = "https://api.dehashed.com/v2/search"
+		}
+		body, _ := json.Marshal(map[string]any{"query": query, "size": req.Size, "page": 1})
+		httpReq, err = http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
+		if err == nil {
+			httpReq.Header.Set("Content-Type", "application/json")
+			httpReq.Header.Set("Dehashed-Api-Key", req.APIKey)
+		}
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	httpReq.Header.Set("Accept", "application/json")
+
+	resp, err := (&http.Client{Timeout: 45 * time.Second}).Do(httpReq)
+	if err != nil {
+		return nil, nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024*1024))
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	var parsed struct {
+		Entries []map[string]any `json:"entries"`
+		Total   any              `json:"total"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil, nil, fmt.Errorf("could not parse response: %w", err)
+	}
+	return parsed.Entries, parsed.Total, nil
+}
+
+// perDomainResult summarizes what one domain's search yielded.
+type perDomainResult struct {
+	Domain  string `json:"domain"`
+	Users   int    `json:"users"`
+	Records int    `json:"records"`
+	Total   any    `json:"total,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
 func handleTSDehashed(dir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req dehashedReq
@@ -293,94 +426,117 @@ func handleTSDehashed(dir string) http.HandlerFunc {
 			http.Error(w, "api_key is required", http.StatusBadRequest)
 			return
 		}
-		query := strings.TrimSpace(req.Query)
-		if query == "" {
-			if req.Domain == "" {
-				http.Error(w, "domain or query is required", http.StatusBadRequest)
-				return
-			}
-			query = "domain:" + req.Domain
-		}
 		if req.Size <= 0 || req.Size > 10000 {
 			req.Size = 100
 		}
-		endpoint := strings.TrimSpace(req.Endpoint)
 
-		ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+		// Build the searches to run. A pasted list of domains → one
+		// `domain:<d>` search each; otherwise a single verbatim query.
+		type search struct{ domain, query string }
+		var searches []search
+		domains := splitList(req.Domain)
+		customQuery := strings.TrimSpace(req.Query)
+		switch {
+		case len(domains) > 0:
+			for _, d := range domains {
+				searches = append(searches, search{domain: d, query: "domain:" + d})
+			}
+		case customQuery != "":
+			searches = append(searches, search{query: customQuery})
+		default:
+			http.Error(w, "domain(s) or query is required", http.StatusBadRequest)
+			return
+		}
+
+		// A generous overall budget; per-request client timeout is 45s each.
+		ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
 		defer cancel()
-
-		var httpReq *http.Request
-		var err error
-		if req.Email != "" {
-			// DeHashed v1: GET with HTTP basic auth (email:apikey).
-			if endpoint == "" {
-				endpoint = "https://api.dehashed.com/search"
-			}
-			httpReq, err = http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-			if err == nil {
-				q := httpReq.URL.Query()
-				q.Set("query", query)
-				q.Set("size", fmt.Sprintf("%d", req.Size))
-				httpReq.URL.RawQuery = q.Encode()
-				httpReq.SetBasicAuth(req.Email, req.APIKey)
-			}
-		} else {
-			// DeHashed v2: POST JSON with the Dehashed-Api-Key header.
-			if endpoint == "" {
-				endpoint = "https://api.dehashed.com/v2/search"
-			}
-			body, _ := json.Marshal(map[string]any{"query": query, "size": req.Size, "page": 1})
-			httpReq, err = http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(body)))
-			if err == nil {
-				httpReq.Header.Set("Content-Type", "application/json")
-				httpReq.Header.Set("Dehashed-Api-Key", req.APIKey)
-			}
-		}
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		httpReq.Header.Set("Accept", "application/json")
-
-		resp, err := (&http.Client{Timeout: 45 * time.Second}).Do(httpReq)
-		if err != nil {
-			http.Error(w, "dehashed request failed: "+err.Error(), http.StatusBadGateway)
-			return
-		}
-		defer resp.Body.Close()
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024*1024))
-		if resp.StatusCode != http.StatusOK {
-			http.Error(w, fmt.Sprintf("dehashed HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw))), http.StatusBadGateway)
-			return
-		}
-
-		var parsed struct {
-			Entries []map[string]any `json:"entries"`
-			Total   any              `json:"total"`
-		}
-		if err := json.Unmarshal(raw, &parsed); err != nil {
-			http.Error(w, "could not parse dehashed response: "+err.Error(), http.StatusBadGateway)
-			return
-		}
 
 		emailSet := map[string]bool{}
 		userSet := map[string]bool{}
 		var emails, users []string
-		for _, e := range parsed.Entries {
-			for _, v := range asStrings(e["email"]) {
-				v = strings.ToLower(strings.TrimSpace(v))
-				if v != "" && !emailSet[v] {
-					emailSet[v] = true
-					emails = append(emails, v)
+		var records []dhRecord
+		var per []perDomainResult
+		totalSum, haveTotal := 0, true
+
+		ulDir := tsPathsFor(dir).userlists
+		_ = os.MkdirAll(ulDir, 0o755)
+
+		for _, s := range searches {
+			entries, total, err := dehashedDo(ctx, req, s.query)
+			if err != nil {
+				// One search of many: record the error and keep going so a
+				// single bad domain doesn't sink the whole batch. A lone
+				// search fails outright so the operator sees why.
+				if len(searches) == 1 {
+					http.Error(w, "dehashed "+err.Error(), http.StatusBadGateway)
+					return
+				}
+				per = append(per, perDomainResult{Domain: s.domain, Error: err.Error()})
+				haveTotal = false
+				continue
+			}
+
+			var domEmails, domUsers []string
+			domESeen, domUSeen := map[string]bool{}, map[string]bool{}
+			for _, e := range entries {
+				records = append(records, dhRecord{
+					Domain:         s.domain,
+					Email:          joinField(e, "email"),
+					Username:       joinField(e, "username"),
+					Password:       joinField(e, "password"),
+					HashedPassword: joinField(e, "hashed_password"),
+					Name:           joinField(e, "name"),
+					Database:       joinField(e, "database_name"),
+					IPAddress:      joinField(e, "ip_address"),
+					Phone:          joinField(e, "phone"),
+				})
+				for _, v := range asStrings(e["email"]) {
+					v = strings.ToLower(strings.TrimSpace(v))
+					if v == "" {
+						continue
+					}
+					if !emailSet[v] {
+						emailSet[v] = true
+						emails = append(emails, v)
+					}
+					if !domESeen[v] {
+						domESeen[v] = true
+						domEmails = append(domEmails, v)
+					}
+				}
+				for _, v := range asStrings(e["username"]) {
+					v = strings.TrimSpace(v)
+					if v == "" {
+						continue
+					}
+					if !userSet[v] {
+						userSet[v] = true
+						users = append(users, v)
+					}
+					if !domUSeen[v] {
+						domUSeen[v] = true
+						domUsers = append(domUsers, v)
+					}
 				}
 			}
-			for _, v := range asStrings(e["username"]) {
-				v = strings.TrimSpace(v)
-				if v != "" && !userSet[v] {
-					userSet[v] = true
-					users = append(users, v)
-				}
+
+			// Per-domain userlist file (emails preferred as UPNs).
+			domList := domEmails
+			if len(domList) == 0 {
+				domList = domUsers
 			}
+			if len(domList) > 0 && s.domain != "" {
+				base := reSafe.ReplaceAllString(s.domain, "_")
+				_ = os.WriteFile(filepath.Join(ulDir, base+"-dehashed.txt"), []byte(strings.Join(domList, "\n")+"\n"), 0o644)
+			}
+
+			if n, ok := toInt(total); ok {
+				totalSum += n
+			} else {
+				haveTotal = false
+			}
+			per = append(per, perDomainResult{Domain: s.domain, Users: len(domList), Records: len(entries), Total: total})
 		}
 
 		// Prefer emails (usable as O365 UPNs); fall back to usernames.
@@ -391,27 +547,61 @@ func handleTSDehashed(dir string) http.HandlerFunc {
 			kind = "username"
 		}
 
-		savedPath := ""
+		// Name the combined artifacts after the single domain, else "combined".
+		base := "dehashed"
+		switch {
+		case len(domains) == 1:
+			base = reSafe.ReplaceAllString(domains[0], "_")
+		case len(domains) > 1:
+			base = "combined"
+		}
+
+		savedPath, savedURL := "", ""
 		if len(list) > 0 {
-			if err := os.MkdirAll(tsPathsFor(dir).userlists, 0o755); err == nil {
-				base := reSafe.ReplaceAllString(req.Domain, "_")
-				if base == "" {
-					base = "dehashed"
+			savedPath = filepath.Join(ulDir, base+"-dehashed.txt")
+			_ = os.WriteFile(savedPath, []byte(strings.Join(list, "\n")+"\n"), 0o644)
+			savedURL = rawURLFor(dir, savedPath)
+		}
+
+		// Persist the full credential table as CSV so it survives the session
+		// and can be fed to other tools.
+		csvPath, csvURL := "", ""
+		if len(records) > 0 {
+			csvPath = filepath.Join(ulDir, base+"-dehashed.csv")
+			if f, err := os.Create(csvPath); err == nil {
+				cw := csv.NewWriter(f)
+				_ = cw.Write(dhCSVHeader)
+				for _, rec := range records {
+					_ = cw.Write(rec.row())
 				}
-				savedPath = filepath.Join(tsPathsFor(dir).userlists, base+"-dehashed.txt")
-				_ = os.WriteFile(savedPath, []byte(strings.Join(list, "\n")+"\n"), 0o644)
+				cw.Flush()
+				_ = f.Close()
+				csvURL = rawURLFor(dir, csvPath)
+			} else {
+				csvPath = ""
 			}
 		}
 
+		var totalOut any
+		if haveTotal {
+			totalOut = totalSum
+		}
+
 		writeJSON(w, map[string]any{
-			"kind":       kind,
-			"users":      list,
-			"count":      len(list),
-			"emails":     len(emails),
-			"usernames":  len(users),
-			"total":      parsed.Total,
-			"saved_path": savedPath,
-			"query":      query,
+			"kind":         kind,
+			"users":        list,
+			"count":        len(list),
+			"emails":       len(emails),
+			"usernames":    len(users),
+			"records":      records,
+			"record_count": len(records),
+			"total":        totalOut,
+			"domains":      domains,
+			"per_domain":   per,
+			"saved_path":   savedPath,
+			"saved_url":    savedURL,
+			"csv_path":     csvPath,
+			"csv_url":      csvURL,
 		})
 	}
 }
@@ -506,10 +696,13 @@ func handleTSRun(dir string) http.HandlerFunc {
 			passwords = passwords[:req.MaxAttempts]
 		}
 
-		// Validate mode requirements.
+		// Validate mode requirements. Recon accepts a pasted list of domains
+		// (one tenant per line) and enumerates each in turn.
+		var reconDomains []string
 		switch req.Mode {
 		case "recon":
-			if req.Domain == "" {
+			reconDomains = splitList(req.Domain)
+			if len(reconDomains) == 0 {
 				tsSend(w, flusher, "line", "[error] recon requires a tenant/domain")
 				tsSendJSON(w, flusher, "done", map[string]any{"ok": false, "exit": 2})
 				return
@@ -540,91 +733,113 @@ func handleTSRun(dir string) http.HandlerFunc {
 		}
 		_ = os.MkdirAll(p.home, 0o755)
 
-		args := []string{"-m", req.Module}
 		usersFile := ""
 		if len(users) > 0 {
 			usersFile = filepath.Join(runDir, "users.txt")
 			_ = os.WriteFile(usersFile, []byte(strings.Join(users, "\n")+"\n"), 0o644)
 		}
 
+		// Flags shared by every invocation this run makes.
+		common := []string{}
+		if req.URL != "" {
+			common = append(common, "--url", req.URL)
+		}
+		if req.Threads > 0 {
+			common = append(common, "-t", fmt.Sprintf("%d", req.Threads))
+		}
+		if req.Delay > 0 {
+			common = append(common, "-d", trimFloat(req.Delay))
+		}
+		if req.LockoutDelay > 0 {
+			common = append(common, "-ld", trimFloat(req.LockoutDelay))
+		}
+		if req.Jitter > 0 {
+			common = append(common, "-j", trimFloat(req.Jitter))
+		}
+		if req.Timeout > 0 {
+			common = append(common, "--timeout", trimFloat(req.Timeout))
+		}
+		if req.IgnoreLock {
+			common = append(common, "--ignore-lockouts")
+		}
+		if req.Force {
+			common = append(common, "-f")
+		}
+		if req.Verbose {
+			common = append(common, "-v")
+		}
+
+		// Build the list of invocations. Recon runs once per domain; spray/test
+		// is a single invocation over the full userlist.
+		type invocation struct {
+			label string
+			args  []string
+		}
+		var invs []invocation
 		switch req.Mode {
 		case "recon":
-			args = append(args, "--recon", req.Domain)
-			if usersFile != "" {
-				args = append(args, "-u", usersFile)
-				if req.UserEnum != "" {
-					args = append(args, "-ue", req.UserEnum)
+			for _, d := range reconDomains {
+				a := []string{"-m", req.Module, "--recon", d}
+				if usersFile != "" {
+					a = append(a, "-u", usersFile)
+					if req.UserEnum != "" {
+						a = append(a, "-ue", req.UserEnum)
+					}
 				}
+				invs = append(invs, invocation{label: d, args: append(a, common...)})
 			}
 		case "spray", "test":
 			passFile := filepath.Join(runDir, "passwords.txt")
 			_ = os.WriteFile(passFile, []byte(strings.Join(passwords, "\n")+"\n"), 0o644)
-			args = append(args, "-u", usersFile, "-p", passFile)
+			a := []string{"-m", req.Module, "-u", usersFile, "-p", passFile}
 			if req.ExitOnSuccess || req.Mode == "test" {
-				args = append(args, "-e")
+				a = append(a, "-e")
 			}
+			invs = append(invs, invocation{label: req.Mode, args: append(a, common...)})
 		}
 
-		if req.URL != "" {
-			args = append(args, "--url", req.URL)
-		}
-		if req.Threads > 0 {
-			args = append(args, "-t", fmt.Sprintf("%d", req.Threads))
-		}
-		if req.Delay > 0 {
-			args = append(args, "-d", trimFloat(req.Delay))
-		}
-		if req.LockoutDelay > 0 {
-			args = append(args, "-ld", trimFloat(req.LockoutDelay))
-		}
-		if req.Jitter > 0 {
-			args = append(args, "-j", trimFloat(req.Jitter))
-		}
-		if req.Timeout > 0 {
-			args = append(args, "--timeout", trimFloat(req.Timeout))
-		}
-		if req.IgnoreLock {
-			args = append(args, "--ignore-lockouts")
-		}
-		if req.Force {
-			args = append(args, "-f")
-		}
-		if req.Verbose {
-			args = append(args, "-v")
-		}
-
-		tsSend(w, flusher, "line", "[*] $ trevorspray "+strings.Join(args, " "))
 		if attemptNote != "" {
 			tsSend(w, flusher, "line", attemptNote)
 		}
+		if len(invs) > 1 {
+			tsSend(w, flusher, "line", fmt.Sprintf("[*] running recon against %d domains", len(invs)))
+		}
 		tsSend(w, flusher, "line", "[*] output dir: "+runDir+"\n")
-
-		cmd := exec.CommandContext(r.Context(), p.bin, args...)
-		// Isolate TREVORspray's ~/.trevorspray state per engagement; force
-		// unbuffered Python so lines reach the browser as they happen.
-		cmd.Env = append(os.Environ(), "HOME="+p.home, "PYTHONUNBUFFERED=1")
-		cmd.Dir = runDir
 
 		logPath := filepath.Join(runDir, "trevorspray.log")
 		logw, _ := os.Create(logPath)
 		if logw != nil {
 			defer logw.Close()
 		}
-		code := streamCmd(w, flusher, cmd, logw)
 
-		rawURL := func(abs string) string {
-			if rel, err := filepath.Rel(dir, abs); err == nil {
-				return "/raw/" + filepath.ToSlash(rel)
+		// Run each invocation sequentially, streaming into the same terminal and
+		// log. The overall exit code is the first non-zero one seen.
+		code := 0
+		for i, inv := range invs {
+			if len(invs) > 1 {
+				tsSend(w, flusher, "line", fmt.Sprintf("\n[*] === recon %d/%d: %s ===", i+1, len(invs), inv.label))
+				if logw != nil {
+					_, _ = io.WriteString(logw, fmt.Sprintf("\n=== recon %d/%d: %s ===\n", i+1, len(invs), inv.label))
+				}
 			}
-			return abs
+			tsSend(w, flusher, "line", "[*] $ trevorspray "+strings.Join(inv.args, " "))
+			cmd := exec.CommandContext(r.Context(), p.bin, inv.args...)
+			// Isolate TREVORspray's ~/.trevorspray state per engagement; force
+			// unbuffered Python so lines reach the browser as they happen.
+			cmd.Env = append(os.Environ(), "HOME="+p.home, "PYTHONUNBUFFERED=1")
+			cmd.Dir = runDir
+			if c := streamCmd(w, flusher, cmd, logw); c != 0 && code == 0 {
+				code = c
+			}
 		}
+
 		tsSend(w, flusher, "line", fmt.Sprintf("\n[+] finished (exit %d)", code))
 		tsSendJSON(w, flusher, "done", map[string]any{
 			"ok":       code == 0,
 			"exit":     code,
-			"run_dir":  rawURL(runDir) + "/",
-			"log":      rawURL(logPath),
-			"tool_log": rawURL(filepath.Join(p.home, ".trevorspray", "trevorspray.log")),
+			"run_dir":  rawURLFor(dir, runDir) + "/",
+			"log":      rawURLFor(dir, logPath),
+			"tool_log": rawURLFor(dir, filepath.Join(p.home, ".trevorspray", "trevorspray.log")),
 		})
 	}
 }

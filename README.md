@@ -105,24 +105,36 @@ The **Run** button stays disabled until this succeeds.
 | **API endpoint** | Blank → v2 default `https://api.dehashed.com/v2/search`. Override for another API/version. |
 | **API key** | Your DeHashed key (**show** toggle reveals it). |
 | **Email** | Blank → **v2** (`Dehashed-Api-Key` header). Set it → **v1** (GET + HTTP basic auth `email:key`). |
-| **Domain / tenant** | e.g. `contoso.com` → queries `domain:contoso.com`. |
-| **Max results** | Cap on returned records (default 100). |
+| **Domain(s) / tenant** | e.g. `contoso.com` → queries `domain:contoso.com`. Paste a **line-separated list** to sweep several tenants in one shot. |
+| **Max results** | Cap on returned records **per domain** (default 100). |
 
-**Fetch users from DeHashed** dedupes emails (preferred as O365 UPNs) and
-usernames, saves them to `<engagement>/trevorspray/userlists/<domain>-dehashed.txt`,
-and loads them into the **Users** box. Previously-saved lists appear as **Saved
-userlists** chips — click one to reload it. You can also skip this and paste
-emails directly.
+**Fetch from DeHashed** dedupes emails (preferred as O365 UPNs) and usernames,
+saves them to `<engagement>/trevorspray/userlists/<domain>-dehashed.txt`, and
+loads them into the **Users** box. With several domains you also get a
+`combined-dehashed.txt` (all tenants merged) plus a per-domain breakdown chip
+row. Previously-saved lists appear as **Saved userlists** chips — click one to
+reload it. You can also skip this and paste emails directly.
+
+**Exportable credential table.** The full DeHashed records are rendered as a
+sortable-width table below the button — `domain, email, username, password,
+hashed_password, name, database_name, ip_address, phone` (empty columns are
+hidden) — so you can eyeball the creds and reuse them elsewhere. The rows are
+written to `<engagement>/trevorspray/userlists/<name>-dehashed.csv` (linked as
+**Saved CSV**), and **Export CSV** downloads exactly what's shown straight from
+the browser. Handy for credential-stuffing the same passwords against other
+services on the engagement.
 
 ### 3 · Recon / Spray / Test
 
 Pick a **mode**:
 
 - **Recon** — `trevorspray --recon <domain>`: tenant ID/name, other tenant
-  domains, auth URLs, autodiscover, federation config, MX. With the Users box
-  populated it also validates which accounts exist (set **User-enum** to
-  `onedrive` / `seamless_sso` / `teams_photo`). No passwords sent. **Start here**
-  to confirm the tenant and prune your userlist to real accounts.
+  domains, auth URLs, autodiscover, federation config, MX. Paste **one domain
+  per line** to recon several tenants in sequence (each is a separate labelled
+  run in the same terminal). With the Users box populated it also validates
+  which accounts exist (set **User-enum** to `onedrive` / `seamless_sso` /
+  `teams_photo`). No passwords sent. **Start here** to confirm the tenant and
+  prune your userlist to real accounts.
 - **Password spray** — `-u users -p passwords` across all users, capped to
   max-attempts passwords.
 - **Test single user** — uses only the first user and forces exit-on-first-
@@ -164,7 +176,9 @@ Under `<engagement>/trevorspray/` (browse via `/raw/trevorspray/…`):
 venv/                          # the isolated install
 install.log                    # pip output
 home/.trevorspray/             # per-engagement TREVORspray state + cumulative trevorspray.log
-userlists/<domain>-dehashed.txt
+userlists/<domain>-dehashed.txt    # per-domain userlist
+userlists/combined-dehashed.txt    # all domains merged (multi-domain fetch)
+userlists/<name>-dehashed.csv      # full exportable credential table
 runs/<mode>-<timestamp>/
     users.txt  passwords.txt  trevorspray.log
 ```
